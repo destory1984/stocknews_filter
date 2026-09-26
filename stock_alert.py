@@ -115,7 +115,7 @@ PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
 {news}
 
 JSON 만 출력하라. 다른 말은 쓰지 마라.
-{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "왜 관심 있을지 15자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부"}}]}}
+{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "왜 관심 있을지 15자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부", "ko": "제목이 영어면 자연스러운 한국어 제목으로 번역, 한국어 제목이면 빈 문자열"}}]}}
 """
 
 
@@ -245,6 +245,11 @@ def news_line(r: dict) -> str:
     return f"{t}" + (f" ({extra})" if extra else "")
 
 
+def is_english(title: str) -> bool:
+    """한글이 한 자도 없으면 영어 제목으로 본다."""
+    return bool(title) and not re.search("[가-힣]", title)
+
+
 # 반응 버튼: v 값 → (like, strong). 10점·0점은 👍/👎 보다 강한 반응이다.
 FB_VALUES = {"10": (True, True), "1": (True, False), "0": (False, False), "00": (False, True)}
 
@@ -314,7 +319,7 @@ def ask_ollama(cfg: dict, prompt: str, timeout: float) -> str:
 
 
 def parse_results(text: str, batch: list) -> dict:
-    """{id: (score, reason, topic, say)}. 모델이 빠뜨린 뉴스는 결과에 없다."""
+    """{id: (score, reason, topic, say, ko)}. 모델이 빠뜨린 뉴스는 결과에 없다. ko 는 영어 제목의 번역."""
     try:
         items = json.loads(text).get("results", [])
     except (ValueError, AttributeError):
@@ -331,12 +336,13 @@ def parse_results(text: str, batch: list) -> dict:
             continue
         if 1 <= i <= len(batch):
             out[batch[i - 1]["id"]] = (max(0, min(10, score)), str(it.get("reason", "")).strip(),
-                                       str(it.get("topic", "")).strip(), str(it.get("say", "")).strip())
+                                       str(it.get("topic", "")).strip(), str(it.get("say", "")).strip(),
+                                       str(it.get("ko", "") or "").strip() if is_english(batch[i - 1]["title"]) else "")
     return out
 
 
 def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
-    """({id: (score, reason, topic, say)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
+    """({id: (score, reason, topic, say, ko)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
     prompt = PROMPT.format(
         interests=INTERESTS.read_text(encoding="utf-8") if INTERESTS.exists() else "(없음)",
         examples=examples_text(cfg["examples"]),
@@ -357,6 +363,40 @@ def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
                 raise
             log(f"ollama 실패 → claude: {str(e)[:120]}")
     return parse_results(ask_claude(cfg, prompt), batch), "claude"
+
+
+TRANSLATE_PROMPT = """아래 영어 뉴스 제목을 자연스러운 한국어 뉴스 제목으로 번역하라.
+회사 이름은 한국에서 흔히 쓰는 표기로 쓴다 (엔비디아, 마이크론, 브로드컴). 티커는 그대로 둔다.
+JSON 만 출력하라: {{"results": [{{"i": 번호, "ko": "번역한 제목"}}]}}
+
+{news}
+"""
+
+
+def translate_titles(cfg: dict, titles: list) -> list:
+    """영어 제목 목록 → 한국어 제목 목록 (못 한 것은 ""). 판별과 같은 LLM 을 쓴다."""
+    prompt = TRANSLATE_PROMPT.format(news="\n".join(f"{i}. {t}" for i, t in enumerate(titles, 1)))
+    text = ""
+    if cfg["backend"] in ("auto", "ollama"):
+        try:
+            text = ask_ollama(cfg, prompt, cfg["ollama_timeout_sec"])
+        except Exception as e:
+            if cfg["backend"] == "ollama":
+                raise
+            log(f"번역: ollama 실패 → claude: {str(e)[:80]}")
+    if not text:
+        text = ask_claude(cfg, prompt)
+    m = re.search(r"\{.*\}", text, re.S)
+    items = json.loads(m.group(0)).get("results", []) if m else []
+    out = [""] * len(titles)
+    for it in items if isinstance(items, list) else []:
+        try:
+            i = int(it["i"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 1 <= i <= len(titles):
+            out[i - 1] = str(it.get("ko", "")).strip()
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -488,7 +528,7 @@ def telegram_alert(cfg: dict, r: dict, score: int, reason: str):
     if not cfg.get("telegram"):
         return
     text = (f"<b>[{score}점] {html.escape(r.get('tickers', ''))}</b> · {html.escape(reason)}\n"
-            f"<a href=\"{html.escape(r['url'])}\">{html.escape(r['title'])}</a>")
+            f"<a href=\"{html.escape(r['url'])}\">{html.escape(r.get('title_ko') or r['title'])}</a>")
 
     def run():
         err = tg_send(text, silent=quiet_now(cfg))
@@ -507,7 +547,7 @@ def toast(cfg: dict, r: dict, score: int, reason: str):
         return
     fb = f"http://127.0.0.1:{cfg['port']}/fb?id={r['id']}"
     n = Notification(app_id="종목 뉴스 알리미", title=f"[{score}점] {r.get('tickers', '')} · {reason}",
-                     msg=r["title"][:200], launch=r["url"])
+                     msg=(r.get("title_ko") or r["title"])[:200], launch=r["url"])
     # 말로 읽을 때는 토스트 소리를 끈다. 말머리 소리와 겹치면 뉴스 알림인지 헷갈린다
     speaking = cfg["tts"] and not quiet_now(cfg)
     n.set_audio(audio.Silent if speaking else audio.Default, loop=False)
@@ -603,7 +643,9 @@ class Watcher:
             for r in batch:
                 if r["id"] not in result:
                     continue
-                score, reason, topic, say = result[r["id"]]
+                score, reason, topic, say, ko = result[r["id"]]
+                if ko:
+                    r["title_ko"] = ko   # 토스트·텔레그램이 번역 제목을 쓴다
                 # 같은 사건(시진핑 발언 문장마다 뜨는 속보 등)은 한 시간에 한 번만 알린다
                 late = self.is_late(r)
                 alert = (score >= self.cfg["threshold"] and not late and not self.topic_alerted(topic)
@@ -611,7 +653,7 @@ class Watcher:
                 rec = {"id": r["id"], "title": r["title"], "url": r["url"], "source": r.get("source", ""),
                        "tickers": r.get("tickers", ""),
                        "created_at": r["created_at"], "score": score, "reason": reason, "topic": topic,
-                       "say": say, "alerted": alert, "late": late, "by": by,
+                       "say": say, "title_ko": ko, "alerted": alert, "late": late, "by": by,
                        "at": datetime.now(KST).isoformat(timespec="seconds")}
                 self.judged[r["id"]] = rec
                 append_jsonl(JUDGED, rec)
@@ -623,9 +665,28 @@ class Watcher:
                     telegram_alert(self.cfg, r, score, reason)
                     say_alert(self.cfg, say or topic or reason)
 
+    def backfill_translations(self, hours: int = 48, size: int = 20):
+        """번역이 생기기 전에 판별한 영어 제목을 한 번 번역해 둔다 (시작할 때 뒤에서)."""
+        recs = [r for r in self.recent(hours) if "title_ko" not in r and is_english(r.get("title", ""))]
+        done = 0
+        for k in range(0, len(recs), size):
+            batch = recs[k:k + size]
+            try:
+                kos = translate_titles(self.cfg, [r["title"] for r in batch])
+            except Exception as e:
+                log(f"번역 실패: {type(e).__name__}: {str(e)[:100]}")
+                return
+            for r, ko in zip(batch, kos):
+                r["title_ko"] = ko
+                append_jsonl(JUDGED, r)
+                done += bool(ko)
+        if recs:
+            log(f"지난 영어 제목 {done}/{len(recs)}건 번역")
+
     def run(self):
         log(f"감시 시작: {DATA}  (모델 {self.cfg['model']}, 기준 {self.cfg['threshold']}점, "
             f"RSS {self.cfg['fetch_min']}분마다)")
+        threading.Thread(target=self.backfill_translations, daemon=True).start()
         while True:
             try:
                 self.step()
@@ -873,7 +934,9 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
     return (
         f"<tr{cls}><td class=b>{btns}</td>"
         f"<td class=t>{when}</td><td class=s>{r['score']}{by}</td>"
-        f"<td><a{' class=rated' if state else ''} href='{html.escape(r['url'])}' target=_blank>{html.escape(r['title'])}</a>"
+        f"<td><a{' class=rated' if state else ''} href='{html.escape(r['url'])}' target=_blank"
+        f"{' title=' + chr(39) + html.escape(r['title'], quote=True) + chr(39) if r.get('title_ko') else ''}>"
+        f"{html.escape(r.get('title_ko') or r['title'])}</a>"
         f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}{group}</div></td></tr>")
 
 
@@ -1013,7 +1076,7 @@ def main():
             res, by = judge(cfg, batch, topics)
             log(f"{len(batch)}건 판별 {time.time() - t0:.1f}초 ({by})")
             for r in batch:
-                score, reason, topic, say = res.get(r["id"], (None, "(응답 없음)", "", ""))
+                score, reason, topic, say, ko = res.get(r["id"], (None, "(응답 없음)", "", "", ""))
                 mark = "🔔" if score is not None and score >= cfg["threshold"] else "  "
                 print(f"{mark} {score if score is not None else '-':>2} [{topic}] {r['title'][:70]}  — {reason}  🗣 {say}")
                 if topic and topic not in topics:
