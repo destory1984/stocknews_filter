@@ -49,7 +49,7 @@ saveticker_filter 는 사이트가 봇을 막아서 Edge 확장으로 뉴스를 
 | `store.py` | 뉴스·판별·반응 기록을 SQLite 한 파일(`data/stocknews.db`)에 둔다. koreainvest 의 `bars.db` 와 같은 방식(WAL) |
 | `article.py` | 구글 뉴스 링크를 풀어 원문 주소를 찾고 본문 글자를 뽑는다 (요약용, 저장하지 않음) |
 | `settings.py` | ⚙ 설정 창 |
-| `stock_alert_config.json` | 모델, 기준 점수, 포트, 수집 간격 등. 처음 실행할 때 만들어진다 |
+| `stock_alert_config.json` | 모델, 기준 점수, 포트, 수집 간격 등. 처음 실행할 때 기본값으로 만들어진다. 개인 설정이라 저장소에는 없다 |
 | `stock_alert_bg.vbs` / `stock_alert_stop.bat` | 창 없이 백그라운드 실행 / 종료 |
 
 ## 설치

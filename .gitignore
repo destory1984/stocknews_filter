@@ -1,5 +1,6 @@
 # 개인 설정과 수집·판별 기록은 올리지 않는다
 watchlist.json
+stock_alert_config.json
 seen.json
 news/
 data/
