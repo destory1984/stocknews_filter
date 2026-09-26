@@ -891,7 +891,7 @@ class Watcher:
                     self.recent_alerts.append((time.time(), r["title"]))
                     toast(self.cfg, r, score, reason)
                     telegram_alert(self.cfg, r, score, reason)
-                    self.ver += 1   # 목록 페이지가 1.5초 안에 알아채고 다시 그린다
+                    self.ver += 1   # 목록 페이지가 2초 안에 알아채고 다시 그린다
                     say_alert(self.cfg, spoken(r, ko) or say or topic or reason, self.ver)
 
     def fill_missing_ko(self, batch: list, result: dict):
@@ -977,7 +977,7 @@ def make_handler(watcher: Watcher):
                 self.send_response(303)
                 self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else ""))
                 self.end_headers()
-            elif u.path == "/ver":   # 페이지가 1.5초마다 묻는다. 바뀌었으면 목록을 다시 받는다
+            elif u.path == "/ver":   # 페이지가 2초마다 묻는다. 바뀌었으면 목록을 다시 받는다
                 data = str(watcher.ver).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
@@ -1389,7 +1389,7 @@ setInterval(async () => {{
     const v = await (await fetch("/ver", {{cache: "no-store"}})).text();
     if (v !== ver) {{ ver = v; refresh(); }}
   }} catch (e) {{}}
-}}, 1500);
+}}, 2000);
 
 // 같은 사건 묶음과 요약: 펼친 것은 자동 갱신 뒤에도 펼친 채로 둔다
 const opened = new Set(), openedSum = new Set();
