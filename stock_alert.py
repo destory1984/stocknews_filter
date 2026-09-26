@@ -1741,7 +1741,14 @@ def week_page(watcher: Watcher) -> str:
         pr = st["price"]
         move = (f"<b style='color:{'#e06c6c' if pr[2] > 0 else '#6c9be0'}'>{pr[2]:+.1f}%</b> "
                 f"<span class=why>{pr[0]:.2f} → {pr[1]:.2f}</span>") if pr else "<span class=why>값 없음</span>"
-        top = "".join(f"<li{' class=unsure' if x.get('unsure') else ''}>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
+        def meta(x):   # 뉴스 앞에 날짜(한국 시각, 원문 날짜를 확인했으면 그것)와 언론사
+            t = parse_ts(x.get("published_real") or "") or parse_ts(x.get("created_at", ""))
+            src = SOURCE_NAMES.get(x.get("source", ""), x.get("source", ""))
+            k = t.astimezone(KST) if t else None
+            when = f"<span class=meta>{k:%m-%d}({'월화수목금토일'[k.weekday()]}) {k:%H:%M}</span> " if k else ""
+            return when + (f"<span class=src>{html.escape(src)}</span> " if src else "")
+
+        top = "".join(f"<li{' class=unsure' if x.get('unsure') else ''}>{meta(x)}{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
                       f"{html.escape(x.get('title_ko') or x['title'])}</a>"
                       + (" <small title='들어왔을 때 이미 2시간 넘게 지난 뉴스라 원문 날짜를 확인하지 않았다. "
                          "구글이 옛 기사에 새 날짜를 붙인 것일 수 있다'>날짜 확인 안 됨</small>" if x.get("unsure") else "")
@@ -1755,7 +1762,7 @@ def week_page(watcher: Watcher) -> str:
 body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:980px}}
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
 h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
-.card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .card li.unsure{{opacity:.6}} .card li small{{color:#e0a44a}} .back{{color:#8ab4f8}}
+.card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .card li.unsure{{opacity:.6}} .card .meta{{color:#8a9099;font-size:.86em;margin-right:4px}} .card .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .card li small{{color:#e0a44a}} .back{{color:#8ab4f8}}
 </style>
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>주간 리포트</h2>
