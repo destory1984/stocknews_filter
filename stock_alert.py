@@ -588,7 +588,7 @@ class Summarizer:
         self.cache = {}                # id → 본문. 알리기 전에 받은 본문을 요약에 다시 쓴다 (메모리에만)
         self.dated = set()             # 원문 날짜를 본 id (Ollama 가 꺼져 있어도 옛 기사는 가린다)
 
-    def fetch_article(self, rec: dict, urgent: bool = False):
+    def fetch_article(self, rec: dict, urgent: bool = False, why: str = ""):
         """원문 (본문, 처음 나온 시각). 구글이 막는 중이면 article.Busy.
         구글에 묻는 사이를 google_gap_sec 만큼 띄운다. urgent(알리기 전 날짜 보기)는 google_alert_gap_sec 만.
         기다리는 동안 gate 를 쥐고 있지 않는다 — 요약이 3분 기다리는 사이 알림이 막히면 안 된다."""
@@ -603,7 +603,7 @@ class Summarizer:
                     break
             time.sleep(min(left, 5))
         # 언제 물었는지 초 단위로 남긴다. 구글이 몇 번째에, 어떤 간격에서 막는지 보려면 있어야 한다
-        log(f"구글 링크 풀기 ({'알림 전' if urgent else '요약'}) {rec.get('title', '')[:50]}")
+        log(f"구글 링크 풀기 ({why or ('알림 전' if urgent else '요약')}) {rec.get('title', '')[:50]}")
         try:
             _, body, pub = article.fetch_body(rec["url"])
         except article.Busy:
@@ -651,23 +651,22 @@ class Summarizer:
         self.checked = time.time()
         return self.alive
 
-    def pending(self, include_busy: bool = False) -> list:
-        """요약할 것. 야후는 목록에 보이는 뉴스 모두, 구글은 기준 점수(알림 대상) 이상만.
-        구글 기사는 원문 주소를 풀 때마다 구글에 묻는데, 300건을 30초 간격으로 물어도 429 로 막혔다 (2026-09-26)."""
-        todo = [r for r in store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"])
-                if r.get("feed") != "google" or r["score"] >= self.cfg["threshold"]]
-        if not include_busy and time.time() < self.busy_until:
-            todo = [r for r in todo if r.get("feed") != "google"]
-        return todo
+    def pending(self) -> list:
+        """뒤에서 저절로 요약할 것. 야후는 목록에 보이는 뉴스 모두 (RSS 설명을 줄이니 구글을 거치지 않는다).
+        구글은 알리기 전 날짜 확인 때 이미 받아 둔 본문이 있는 것만. 나머지 구글 기사는 목록에서
+        '요약 받기' 를 누를 때 받는다 — 구글에 묻는 것을 줄이려고 (2026-09-26, 3분 간격에도 13번째에 막힘)."""
+        return [r for r in store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"])
+                if r.get("feed") != "google" or r["id"] in self.cache]
 
     def status(self) -> str:
         if not self.cfg.get("summarize"):
             return "요약 꺼짐"
-        n = len(self.pending(include_busy=True))
+        n = len(self.pending())
         if self.alive is False:
             return f"요약: Ollama 꺼짐 · 켜지면 {n}건 요약" if n else "요약: Ollama 꺼짐"
         if time.time() < self.busy_until:
-            return f"요약: 구글이 잠시 막아 {datetime.fromtimestamp(self.busy_until):%H:%M} 부터 다시 · 남은 {n}건"
+            return (f"요약: 구글이 잠시 막아 {datetime.fromtimestamp(self.busy_until):%H:%M} 까지 '요약 받기' 가 안 된다"
+                    + (f" · 남은 {n}건" if n else ""))
         return f"요약 중 · 남은 {n}건" if self.running else (f"요약 대기 {n}건" if n else "요약 다 됨")
 
     def poke(self):
@@ -677,28 +676,59 @@ class Summarizer:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        """구글 기사는 Ollama 와 상관없이 원문 날짜부터 본다 (옛 기사 가리기). 요약은 Ollama 가 켜져 있을 때만."""
+        """뒤에서는 구글에 묻지 않는다. 야후 설명과, 이미 받아 둔 구글 본문만 요약한다 (Ollama 가 켜져 있을 때)."""
         try:
             todo = self.pending()
-            if not todo:
+            if not todo or not self.ollama_alive():
                 return
-            alive = self.ollama_alive()
             for rec in todo[:20]:
                 if not self.cfg.get("summarize"):
                     break
-                # 날짜를 이미 DB 에 적어 둔 기사는 다시 켠 뒤에도 또 묻지 않는다. Ollama 가 꺼져 있으면 본문이
-                # 필요 없으니 그냥 넘어가고, 켜져 있으면 one() 이 그때 한 번 받는다 (09-26 밤 재시작마다 되물은 3건)
-                if rec.get("feed") == "google" and rec["id"] not in self.dated and not rec.get("published_real"):
-                    if not self.check_date(rec):   # 구글이 막는 중
-                        break
-                    if self.w.judged.get(rec["id"], rec).get("summary_state"):   # 옛 기사·본문 없음
-                        continue
-                if alive and not self.one(rec):
+                if not self.one(rec):
                     break
         except Exception as e:
             log(f"요약 오류: {type(e).__name__}: {str(e)[:120]}")
         finally:
             self.running = False
+
+    def summarize_now(self, nid: str) -> dict:
+        """목록에서 '요약 받기' 를 누른 구글 기사 하나. 알리기 전 날짜 확인과 같은 간격(30초)만 지킨다."""
+        live = self.w.judged.get(nid)
+        if not live:
+            return {"ok": False, "msg": "그 뉴스를 찾지 못했다"}
+        if live.get("summary_ko"):
+            return {"ok": True}
+        if not self.cfg.get("summarize"):
+            return {"ok": False, "msg": "설정에서 구글 기사 요약이 꺼져 있다"}
+        if not self.ollama_alive():
+            return {"ok": False, "msg": "Ollama 가 꺼져 있다"}
+        if time.time() < self.busy_until:
+            return {"ok": False, "msg": f"구글이 막는 중 ({datetime.fromtimestamp(self.busy_until):%H:%M} 까지)"}
+        rec = dict(live, feed="google")
+        if nid not in self.cache:
+            try:
+                body, pub = self.fetch_article(rec, urgent=True, why="누름")
+            except article.Busy:
+                return {"ok": False, "msg": f"구글이 막았다 ({datetime.fromtimestamp(self.busy_until):%H:%M} 까지)"}
+            except article.Skip as e:
+                self.save(rec, "", f"skip:{e}")
+                return {"ok": False, "msg": str(e)}
+            except requests.RequestException as e:
+                return {"ok": False, "msg": f"원문을 받지 못했다 ({type(e).__name__})"}
+            self.dated.add(nid)
+            self.mark_date(live, pub)
+            if live.get("stale"):
+                self.cache.pop(nid, None)
+                self.save(rec, "", "skip:옛 기사")
+                return {"ok": False, "msg": f"옛 기사라 숨겼다 (원문 {pub:%Y-%m-%d})"}
+            if len(body) < 80:
+                self.cache.pop(nid, None)
+                self.save(rec, "", "skip:본문을 찾지 못함")
+                return {"ok": False, "msg": "본문을 찾지 못했다"}
+        if not self.one(rec):
+            return {"ok": False, "msg": "Ollama 가 답하지 않았다"}
+        got = self.w.judged.get(nid, {})
+        return {"ok": bool(got.get("summary_ko")), "msg": "" if got.get("summary_ko") else "요약할 내용이 없다"}
 
     def check_date(self, rec: dict) -> bool:
         """원문을 받아 날짜를 기록한다 (본문은 요약에 쓰려고 메모리에 둔다). 구글이 막으면 False."""
@@ -1131,7 +1161,8 @@ def mb_rows(watcher: Watcher, body: dict) -> dict:
 
 SETTING_ROUTES = {"/settings": set_setting, "/say": say_test, "/telegram-test": telegram_test,
                   "/fetch": fetch_now, "/watch": watch_change, "/mb": mb_rows,
-                  "/hide-source": hide_source}
+                  "/hide-source": hide_source,
+                  "/summarize-one": lambda w, body: w.summarizer.summarize_now(str(body.get("id") or ""))}
 
 
 def load_stocks() -> list:
@@ -1337,7 +1368,9 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         # 요약은 접어 둔다. '요약 ▾' 을 누르면 편다
         + (f"<div class=sum data-id='{r['id']}'>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
         + f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}"
-        + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else "")
+        + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else
+           f" <a class=sumget data-id='{r['id']}' title='원문을 받아 Ollama 로 요약한다 (구글에 한 번 묻는다)'>요약 받기</a>"
+           if "news.google.com" in r.get("url", "") and not r.get("summary_state") else "")
         + f"{group}</div></td></tr>")
 
 
@@ -1355,7 +1388,7 @@ body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margi
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.old{{color:#e0a44a;font-size:.8em}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
@@ -1430,6 +1463,23 @@ function applyOpen() {{
 
 // 👍/👎 는 페이지를 옮기지 않고 기록한다. 그래서 스크롤 위치가 그대로 남는다.
 document.getElementById("list").addEventListener("click", async (e) => {{
+  const sg = e.target.closest("a.sumget");
+  if (sg) {{
+    if (sg.dataset.busy) return;
+    sg.dataset.busy = "1";
+    sg.textContent = "요약 받는 중…";
+    try {{
+      const r = await fetch("/summarize-one", {{method: "POST",
+        headers: {{"X-Settings": "yes", "Content-Type": "application/json"}}, body: JSON.stringify({{id: sg.dataset.id}})}});
+      const d = await r.json();
+      if (d.ok) {{ openedSum.add(sg.dataset.id); await refresh(); return; }}
+      sg.textContent = "요약 못 함: " + (d.msg || r.status);
+    }} catch (err) {{
+      sg.textContent = "요약 못 함";
+    }}
+    delete sg.dataset.busy;
+    return;
+  }}
   const sb = e.target.closest("a.sumbtn");
   if (sb) {{
     openedSum.has(sb.dataset.id) ? openedSum.delete(sb.dataset.id) : openedSum.add(sb.dataset.id);
