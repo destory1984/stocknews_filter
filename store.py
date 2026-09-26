@@ -183,6 +183,18 @@ def source_stats() -> list:
         group by j.source""")]
 
 
+def judged_with_feedback() -> list:
+    """반응(뉴스마다 마지막 것, 취소는 뺌)을 받은 판별 기록: 제목, 점수, like, strong, 언제 판별했나."""
+    return [dict(r) for r in con().execute("""
+        select j.id, coalesce(nullif(j.title_ko, ''), j.title) title, j.url, j.score, j.created_at,
+               f."like", f.strong
+        from (select id, "like", strong from feedback
+              where n in (select max(n) from feedback group by id)) f
+        join judged j on j.id = f.id
+        where f."like" is not null
+        order by j.created_at desc""")]
+
+
 def add_feedback(rec: dict):
     like = rec.get("like")
     _commit('insert into feedback (id, title, "like", strong, at) values (?,?,?,?,?)',

@@ -1135,6 +1135,35 @@ SOURCE_NAMES = {"finance.yahoo.com": "Yahoo Finance", "v.daum.net": "다음"}
 FB_LABELS = {"10": "🔔10점", "1": "👍", "0": "👎", "00": "🔕0점"}
 
 
+def grading_html(watcher: Watcher) -> str:
+    """판별 채점: 전하가 준 반응별로 모델 점수가 어땠나, 그리고 크게 어긋난 뉴스."""
+    th, low = watcher.cfg["threshold"], watcher.cfg["hide_max_score"]
+    recs = store.judged_with_feedback()
+    if not recs:
+        return "<p class=why>아직 반응(🔔10·👍·👎·🔕0)이 없어 채점할 것이 없다.</p>"
+    kinds = (("🔔10", 1, 1), ("👍", 1, 0), ("👎", 0, 0), ("🔕0", 0, 1))
+    rows = []
+    for label, like, strong in kinds:
+        sc = [r["score"] for r in recs if r["like"] == like and bool(r["strong"]) == bool(strong)]
+        if not sc:
+            continue
+        hit = sum(1 for x in sc if x >= th) if like else sum(1 for x in sc if x <= low)
+        rows.append(f"<tr><td>{label}</td><td>{len(sc)}</td><td>{sum(sc) / len(sc):.1f}</td>"
+                    f"<td>{min(sc)}~{max(sc)}</td><td>{hit}건 ({hit / len(sc):.0%})</td></tr>")
+    # 크게 어긋난 것: 좋다 했는데 숨김 점수 이하, 싫다 했는데 알림 점수 이상
+    miss = [r for r in recs if (r["like"] and r["score"] <= low) or (not r["like"] and r["score"] >= th)]
+    items = "".join(
+        f"<li>{'👍' if r['like'] else '👎'} <b>{r['score']}점</b> "
+        f"<a href=\"{html.escape(r['url'])}\" target=_blank>{html.escape(r['title'][:90])}</a> "
+        f"<small>{html.escape(r['created_at'][:10])}</small></li>" for r in miss[:20])
+    return (f"<table class=g><thead><tr><th>반응</th><th>건수</th><th>평균 점수</th><th>범위</th>"
+            f"<th>맞힘</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+            f"<p class=why>맞힘: 좋다(🔔10·👍) 한 것은 {th}점 이상(알림), 싫다(👎·🔕0) 한 것은 {low}점 이하(숨김)였던 비율. "
+            f"그 사이 점수는 맞히지도 틀리지도 않은 것으로 본다.</p>"
+            + (f"<p class=why>크게 어긋난 것 {len(miss)}건 — interests.md 를 고칠 때 볼 것</p><ul class=miss>{items}</ul>"
+               if miss else "<p class=why>크게 어긋난 것은 없다.</p>"))
+
+
 def sources_page(watcher: Watcher) -> str:
     """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서만 안 보인다."""
     muted = set(watcher.cfg.get("hide_sources") or [])
@@ -1154,7 +1183,7 @@ def sources_page(watcher: Watcher) -> str:
             f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td>"
             f"<td><button class=hs data-src=\"{html.escape(src, quote=True)}\" data-hide={'0' if off else '1'}>"
             f"{'되살리기' if off else '가리기'}</button></td></tr>")
-    return f"""<!doctype html><meta charset=utf-8><title>언론사 성적표 · 종목 뉴스 필터</title>
+    return f"""<!doctype html><meta charset=utf-8><title>성적표 · 종목 뉴스 필터</title>
 <style>
 body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 a{{color:#8ab4f8}} h2{{margin:0 0 4px;font-size:1.3em}} .why{{color:#8a9099;font-size:.86em}}
@@ -1163,9 +1192,14 @@ th:first-child,td:first-child{{text-align:left}} th{{cursor:pointer;color:#b8bec
 td small{{color:#8a9099}} tr.off td{{color:#6b7078}}
 button.hs{{font:inherit;font-size:.85em;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:6px;padding:2px 8px;cursor:pointer}}
 tr.off button.hs{{background:#3a4a6b}}
+h3{{margin:18px 0 4px;font-size:1.1em}} table.g td,table.g th{{cursor:default}} ul.miss{{margin:4px 0;padding-left:20px}}
+ul.miss li{{margin:2px 0}} ul.miss a{{color:#e6e6e6;text-decoration:none}} ul.miss small{{color:#8a9099}}
 </style>
-<h2>언론사 성적표</h2>
-<p class=why><a href='/'>← 판별 목록</a> · {html.escape(first[:10])} 부터 판별한 {sum(r['n'] for r in stats)}건, 언론사 {len(stats)}곳 ·
+<p class=why><a href='/'>← 판별 목록</a></p>
+<h2>판별 채점</h2>
+{grading_html(watcher)}
+<h2 style="margin-top:22px">언론사 성적표</h2>
+<p class=why>{html.escape(first[:10])} 부터 판별한 {sum(r['n'] for r in stats)}건, 언론사 {len(stats)}곳 ·
 '알림' 은 {th}점 이상 · 👍·👎 는 🔔10·🔕0 포함, 뉴스마다 마지막 반응만 ·
 가린 언론사는 판별 목록에서만 안 보인다 (판별·알림은 그대로, '모두 보기' 로 볼 수 있다) · 머리글을 누르면 정렬</p>
 <table id=t><thead><tr><th>언론사</th><th>건수</th><th>평균 점수</th><th>알림</th><th>👍</th><th>👎</th><th>{len(muted)}곳 가림</th></tr></thead>
@@ -1306,7 +1340,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
