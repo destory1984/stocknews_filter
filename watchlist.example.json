@@ -1,0 +1,22 @@
+[
+  {
+    "name": "삼성전자",
+    "google": "삼성전자",
+    "yahoo": "005930.KS",
+    "keywords": ["삼성전자", "Samsung Electronics"],
+    "exclude": ["삼성전자우"]
+  },
+  {
+    "name": "SK하이닉스",
+    "yahoo": "000660.KS",
+    "keywords": ["하이닉스", "Hynix"]
+  },
+  {
+    "name": "NVIDIA",
+    "google": "NVIDIA stock",
+    "yahoo": "NVDA",
+    "lang": "en",
+    "keywords": ["Nvidia", "NVDA"],
+    "exclude_sources": ["MarketBeat"]
+  }
+]

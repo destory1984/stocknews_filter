@@ -1,0 +1,7 @@
+watchlist.json
+seen.json
+news/
+*.csv
+*.log
+.env
+__pycache__/
