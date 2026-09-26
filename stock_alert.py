@@ -912,7 +912,7 @@ class Watcher:
             if done:   # 목록 표시용으로만 최신 값을 반영한다
                 done["title"] = r["title"]   # 원문 제목이 나중에 한글로 바뀐 경우
                 done.setdefault("source", r.get("source", ""))
-            if done or r["id"] in seen or r["ts"] < cutoff:
+            if done or r["id"] in seen or r["ts"] < cutoff or found_late(r, self.cfg):
                 continue
             seen.add(r["id"])
             out.append(r)
@@ -1626,6 +1626,17 @@ document.querySelector("#t tbody").addEventListener("click", async (e) => {{
 
 
 PAGE_SIZE = 50    # 목록에 한 번에 보이는 뉴스 수 (같은 사건으로 접힌 것도 센다). 맨 아래 '더 보기' 를 누르면 이만큼씩 더
+
+
+def found_late(r: dict, cfg: dict) -> bool:
+    """구글 기사인데, 구글이 붙인 날짜보다 max_age_min 넘게 늦게 받았는가. 이런 기사는 판별하지 않는다.
+    알림도 안 나가고 목록에서도 숨기는 것이라 모델만 헛되이 부른다. 구글이 옛 기사에 새 날짜를 붙인 것이
+    많고 (4월·7월 Stocktwits 기사), 종목을 새로 넣으면 하루치가 한꺼번에 들어온다 (Micron 73건).
+    09-27 전하: "늦게 수집된건 지워"."""
+    if r.get("feed") != "google":
+        return False
+    found = parse_ts(r.get("found_at", ""))
+    return bool(found and r.get("ts") and found - r["ts"] > timedelta(minutes=cfg["max_age_min"]))
 
 
 def unverified_late(r: dict) -> bool:
