@@ -1435,7 +1435,12 @@ def earnings_line() -> str:
             f"{at:%m-%d}({'월화수목금토일'[at.weekday()]}) {at:%H:%M}{'께' if item.get('approx') else ''}"
             f"{' ' + item['session'] if item.get('session') else ''}"
             f"{' 확정' if sure else ' 추정' if sure is False else ''} {'오늘' if left == 0 else f'D-{left}'}</span>")
-    return "<p class=why id=earn>실적 발표 (한국 시각): " + " · ".join(parts) + "</p>"
+    # 접어 둔다. 접힌 줄에는 가장 가까운 한 종목만 보인다. 편 상태는 이 브라우저에 기억한다
+    t, at, left, _ = items[0]
+    near = f"{html.escape(t)} {at:%m-%d} {'오늘' if left == 0 else f'D-{left}'}"
+    return (f"<details class=why id=earn><summary>실적 발표 {len(items)}종목 · 가장 가까운 "
+            f"<span{' class=warn' if left <= 3 else ''}>{near}</span></summary>"
+            "한국 시각: " + " · ".join(parts) + "</details>")
 
 
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
@@ -1452,7 +1457,7 @@ body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margi
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
@@ -1500,6 +1505,13 @@ async function refresh() {{
   }}
 }}
 setInterval(refresh, 15000);
+
+// 실적 발표 줄: 편 채로 두었으면 다음에도 펴 둔다 (이 브라우저에만 기억)
+const earn = document.getElementById("earn");
+if (earn) {{
+  try {{ earn.open = localStorage.getItem("earnOpen") === "1"; }} catch (e) {{}}
+  earn.addEventListener("toggle", () => {{ try {{ localStorage.setItem("earnOpen", earn.open ? "1" : "0"); }} catch (e) {{}} }});
+}}
 
 // 새 알림은 화면에 먼저 띄우고, 그다음 서버가 읽는다. 판 번호가 바뀌면 곧바로 다시 받는다.
 let ver = "{watcher.ver}";
