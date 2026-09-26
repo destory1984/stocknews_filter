@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+import settings
 import stocknews
 
 BASE = Path(__file__).resolve().parent
@@ -78,7 +79,10 @@ DEFAULTS = {
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
     "tts_rate": "+0%",
     "tts_chime": r"C:\Windows\Media\Windows Notify Email.wav",   # saveticker(Messaging)·RSI 와 다른 소리
-    "tts_quiet": "",               # 말하지 않을 시간대, 예: "23-07". 비우면 늘 말한다 (토스트는 그대로)
+    "quiet_on": False,             # 조용한 시각을 쓸지
+    "tts_quiet": "23:00-07:00",    # 조용한 시각: 말하지 않는다 (토스트·텔레그램은 소리 없이 그대로)
+    "toast": True,                 # 윈도우 토스트
+    "telegram": False,             # 텔레그램으로도 보낸다 (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수)
 }
 
 PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
@@ -430,12 +434,17 @@ def speak(cfg: dict, text: str) -> str:
 
 
 def quiet_now(cfg: dict) -> bool:
-    """tts_quiet("23-07") 시간대 안인가."""
-    m = re.fullmatch(r"\s*(\d{1,2})\s*-\s*(\d{1,2})\s*", cfg.get("tts_quiet") or "")
+    """조용한 시각("23:00-07:00") 안인가. 옛 형식 "23-07" 도 읽는다."""
+    if not cfg.get("quiet_on"):
+        return False
+    m = re.fullmatch(r"\s*(\d{1,2})(?::(\d\d))?\s*-\s*(\d{1,2})(?::(\d\d))?\s*", cfg.get("tts_quiet") or "")
     if not m:
         return False
-    a, b, h = int(m[1]), int(m[2]), datetime.now().hour
-    return a <= h < b if a <= b else h >= a or h < b
+    a = int(m[1]) * 60 + int(m[2] or 0)
+    b = int(m[3]) * 60 + int(m[4] or 0)
+    now = datetime.now()
+    t = now.hour * 60 + now.minute
+    return a <= t < b if a <= b else t >= a or t < b
 
 
 _speech = queue.Queue()
@@ -457,7 +466,40 @@ def say_alert(cfg: dict, text: str):
     _speech.put(text)
 
 
+def tg_ready() -> bool:
+    return bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
+
+
+def tg_send(text: str, silent: bool = False) -> str:
+    """텔레그램으로 보낸다. 실패하면 까닭을, 성공하면 "" 를 돌려준다. 토큰은 어디에도 찍지 않는다."""
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 없다"
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=15, data={
+            "chat_id": chat, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": "true", "disable_notification": "true" if silent else "false"})
+    except requests.RequestException as e:
+        return f"텔레그램에 닿지 못함 ({type(e).__name__})"
+    return "" if r.ok else f"텔레그램 오류 HTTP {r.status_code}"
+
+
+def telegram_alert(cfg: dict, r: dict, score: int, reason: str):
+    if not cfg.get("telegram"):
+        return
+    text = (f"<b>[{score}점] {html.escape(r.get('tickers', ''))}</b> · {html.escape(reason)}\n"
+            f"<a href=\"{html.escape(r['url'])}\">{html.escape(r['title'])}</a>")
+
+    def run():
+        err = tg_send(text, silent=quiet_now(cfg))
+        if err:
+            log(f"텔레그램 실패: {err}")
+    threading.Thread(target=run, daemon=True).start()
+
+
 def toast(cfg: dict, r: dict, score: int, reason: str):
+    if not cfg.get("toast", True):
+        return
     try:
         from winotify import Notification, audio
     except ImportError:
@@ -578,6 +620,7 @@ class Watcher:
                 if alert:
                     self.recent_alerts.append((time.time(), r["title"]))
                     toast(self.cfg, r, score, reason)
+                    telegram_alert(self.cfg, r, score, reason)
                     say_alert(self.cfg, say or topic or reason)
 
     def run(self):
@@ -632,13 +675,18 @@ def make_handler(watcher: Watcher):
                 self.send_page("not found", 404)
 
         def do_POST(self):
-            # 처음부터 다시: 페이지에서 한 번 더 확인받은 뒤에만 온다.
             # 다른 사이트가 몰래 보내지 못하게 사용자 정의 헤더를 요구한다 (브라우저가 막는다).
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
-            if u.path == "/watch" and self.headers.get("X-Watch") == "yes":
-                self.send_json(watch_change(watcher, q))
+            if self.headers.get("X-Settings") == "yes" and u.path in SETTING_ROUTES:
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                    self.send_json(SETTING_ROUTES[u.path](watcher, body))
+                except (ValueError, SystemExit, OSError) as e:
+                    self.send_json({"ok": False, "msg": str(e)})
                 return
+            # 처음부터 다시: 페이지에서 한 번 더 확인받은 뒤에만 온다.
             if u.path != "/reset" or self.headers.get("X-Reset") != "yes" or q.get("what") not in ("feedback", "all"):
                 self.send_page("bad request", 400)
                 return
@@ -654,37 +702,78 @@ def make_handler(watcher: Watcher):
     return H
 
 
-def watch_change(watcher: Watcher, q: dict) -> dict:
-    """종목 추가·삭제 (페이지 맨 위 종목 줄). 추가하면 다음 차례에 바로 뉴스를 받는다."""
-    try:
-        if q.get("op") == "add":
-            s = stocknews.add_stock(q.get("name", ""), q.get("yahoo", ""))
-            watcher.last_fetch = 0
-            log(f"종목 추가: {s['name']}" + (f" ({s['yahoo']})" if s.get("yahoo") else ""))
-            return {"ok": True}
-        if q.get("op") == "remove":
-            stocknews.remove_stock(q.get("name", ""))
-            log(f"종목 삭제: {q.get('name')}  (받아 둔 뉴스와 판별 기록은 그대로 둔다)")
-            return {"ok": True}
+# ─────────────────────────────────────────────────────────────
+# 설정 창 (⚙ 설정) 이 부르는 것들. 모두 {"ok": ..., "msg": ...} 를 돌려준다
+# ─────────────────────────────────────────────────────────────
+
+SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "max_age_min": "알림 시한", "tts": "음성",
+                  "tts_voice": "목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
+                  "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
+                  "catchup_hours": "밀린 뉴스", "backend": "판별 LLM", "claude_model": "Claude 모델",
+                  "model": "Ollama 모델", "hide_max_score": "숨기기"}
+
+
+def set_setting(watcher: Watcher, body: dict) -> dict:
+    key = body.get("key", "")
+    before, after = settings.apply(watcher.cfg, key, body.get("value"))
+    if key == "telegram" and after and not tg_ready():
+        watcher.cfg[key] = before
+        return {"ok": False, "msg": "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 없어 켤 수 없다"}
+    settings.save({k: v for k, v in watcher.cfg.items() if not k.startswith("_")}, CONFIG)
+    if before != after:
+        log(f"설정: {key} {before!r} → {after!r}")
+    return {"ok": True, "label": SETTING_LABELS.get(key, key)}
+
+
+def say_test(watcher: Watcher, body: dict) -> dict:
+    text = str(body.get("text") or "").strip()[:60] or "삼성전자 목표가 상향"
+    by = []
+    # 음성을 꺼 두었어도 들어 볼 수 있게 대기열을 거치지 않고 바로 읽는다
+    t = threading.Thread(target=lambda: by.append(speak(watcher.cfg, text)), daemon=True)
+    t.start()
+    t.join(1.5)   # 첫 소리가 날 때까지는 기다리지 않는다. 실패는 로그로
+    return {"ok": True, "by": {"edge": "Edge 음성", "sapi": "윈도우 기본 음성"}.get(by[0], "") if by else ""}
+
+
+def telegram_test(watcher: Watcher, body: dict) -> dict:
+    err = tg_send("종목 뉴스 알리미 시험 메시지입니다. 이 메시지가 보이면 알림도 여기로 옵니다.")
+    return {"ok": not err, "msg": err}
+
+
+def fetch_now(watcher: Watcher, body: dict) -> dict:
+    n = fetch_news(watcher.cfg)
+    watcher.last_fetch = time.time()
+    watcher.fetch_note = f"{datetime.now(KST):%H:%M} 새 뉴스 {n}건"
+    return {"ok": True, "new": n}
+
+
+def watch_change(watcher: Watcher, body: dict) -> dict:
+    """종목 추가·고치기·빼기. 추가하면 다음 차례(10초 안)에 바로 뉴스를 받는다."""
+    op, name = body.get("op"), str(body.get("name") or "")
+    if op == "add":
+        s = stocknews.add_stock(name, str(body.get("yahoo") or ""))
+        watcher.last_fetch = 0
+        log(f"종목 추가: {s['name']}" + (f" ({s['yahoo']})" if s.get("yahoo") else ""))
+    elif op == "update":
+        s = stocknews.update_stock(name, body.get("fields") or {})
+        log(f"종목 고침: {name} → {s}")
+    elif op == "remove":
+        stocknews.remove_stock(name)
+        log(f"종목 삭제: {name}  (받아 둔 뉴스와 판별 기록은 그대로 둔다)")
+    else:
         return {"ok": False, "msg": "알 수 없는 요청"}
-    except (ValueError, SystemExit, OSError) as e:
-        return {"ok": False, "msg": str(e)}
+    return {"ok": True}
 
 
-def watch_bar() -> str:
+SETTING_ROUTES = {"/settings": set_setting, "/say": say_test, "/telegram-test": telegram_test,
+                  "/fetch": fetch_now, "/watch": watch_change}
+
+
+def load_stocks() -> list:
     try:
-        stocks = stocknews.load_watchlist()
+        return stocknews.load_watchlist()
     except (SystemExit, OSError, ValueError):
-        stocks = []
-    chips = "".join(
-        f"<span class=chip>{html.escape(s['name'])}"
-        + (f" <small>{html.escape(s['yahoo'])}</small>" if s.get("yahoo") else "")
-        + f"<a class=rm data-name=\"{html.escape(s['name'])}\" title='삭제'>×</a></span>"
-        for s in stocks)
-    return (f"<div class=watch>{chips or '<span class=why>종목이 없습니다</span>'}"
-            "<form id=add><input name=stock placeholder='이름 (삼성전자, Micron)' required>"
-            "<input name=yahoo placeholder='야후 티커 (선택: MU, 005930.KS)' size=26>"
-            "<button>추가</button> <span id=watchmsg class=why></span></form></div>")
+        return []
 
 
 def reset_records(watcher: Watcher, what: str) -> list:
@@ -791,45 +880,32 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
     note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
-             f"👎·🔕0 준 뉴스와 {low}점 이하 뉴스 {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
+             f"👎·🔕0 준 뉴스{f'와 {low}점 이하 뉴스' if low >= 0 else ''} {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
+    stocks = load_stocks()
+    names = " · ".join(html.escape(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
+    menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
     return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 알리미</title>
-<style>
-body{{font:14px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
+<style>{settings.CSS}
+body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
-a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:12px}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:16px;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:13px;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:13px}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:11px}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:11px}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:11px}} .by{{font-size:12px;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.watch{{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}} .chip{{padding:3px 4px 3px 9px;border-radius:12px;background:#23382c;color:#9fd8b0;font-size:13px}} .chip small{{color:#7fae8d}} a.rm{{margin-left:4px;padding:0 5px;border-radius:8px;cursor:pointer;color:#7fae8d}} a.rm:hover{{background:#5a2a2a;color:#fff}} #add{{display:flex;gap:6px;align-items:center;margin-left:10px}} #add input{{background:#1f2227;border:1px solid #3a3e45;border-radius:6px;color:#e6e6e6;padding:4px 7px;font:13px system-ui}} #add button{{background:#2d4a37;border:1px solid #4d7a5c;border-radius:6px;color:#e6e6e6;padding:4px 12px;cursor:pointer}} #add button:disabled{{opacity:.5}}
+a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
-<h2>종목 뉴스 알리미 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
-{watch_bar()}
-<p class=why>구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note}</p>
+<header><h2>종목 뉴스 알리미 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
+  <span style="margin-left:auto"></span>
+  <span class=fsz><button class=hbtn id=fsdown title="글자 작게" aria-label="글자 작게">가-</button><button class=hbtn id=fsup title="글자 크게" aria-label="글자 크게">가+</button></span>
+  <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
+</header>
+{menu}
+<p class=why id=stockline>종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
   <a id=reset-all data-n="{n_fb}" data-j="{len(watcher.judged)}">반응과 판별 기록 모두 지우기 ({n_fb}건 · {len(watcher.judged)}건)</a>
   — 지운 기록은 같은 폴더에 .bak 파일로 남는다</p>
+<script>{settings.JS}</script>
 <script>
-// 종목 추가·삭제. 삭제는 한 번 더 묻는다. 받아 둔 뉴스와 판별 기록은 지우지 않는다.
-async function watch(params) {{
-  const r = await fetch("/watch?" + new URLSearchParams(params), {{method: "POST", headers: {{"X-Watch": "yes"}}}});
-  return r.ok ? r.json() : {{ok: false, msg: "요청 실패 (" + r.status + ")"}};
-}}
-document.getElementById("add").onsubmit = async (e) => {{
-  e.preventDefault();
-  const f = e.target, btn = f.querySelector("button"), msg = document.getElementById("watchmsg");
-  btn.disabled = true;
-  msg.textContent = f.yahoo.value.trim() ? "야후 티커 확인 중..." : "";
-  const d = await watch({{op: "add", name: f.stock.value, yahoo: f.yahoo.value}});
-  btn.disabled = false;
-  if (d.ok) location.reload(); else msg.textContent = d.msg;
-}};
-document.querySelectorAll("a.rm").forEach((a) => a.onclick = async () => {{
-  const name = a.dataset.name;
-  if (!confirm(name + " 을(를) 종목에서 뺄까요?\\n\\n이미 받아 둔 뉴스와 판별 기록은 그대로 남습니다.")) return;
-  const d = await watch({{op: "remove", name}});
-  if (d.ok) location.reload(); else alert(d.msg);
-}});
-
 // 처음부터 다시: 지우기 전에 반드시 한 번 더 묻는다
 async function resetRecords(what, msg) {{
   if (!confirm(msg + "\\n\\n정말 지우시겠습니까? (기록은 .bak 파일로 옮겨져 되살릴 수 있습니다)")) return;

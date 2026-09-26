@@ -190,6 +190,44 @@ def add_stock(name, yahoo=""):
     return stock
 
 
+LIST_FIELDS = ("keywords", "exclude", "exclude_sources")
+
+
+def update_stock(old_name, fields):
+    """Replace one entry with values from the settings page.
+    List fields come as comma-separated text; an empty keywords field falls
+    back to the name and ticker. A changed Yahoo ticker is checked first."""
+    stocks = load_watchlist()
+    idx = next((i for i, s in enumerate(stocks) if s["name"] == old_name), None)
+    if idx is None:
+        raise ValueError(f"목록에 없습니다: {old_name}")
+    name = (fields.get("name") or "").strip()
+    if not name:
+        raise ValueError("이름을 넣어 주세요")
+    if any(i != idx and s["name"].lower() == name.lower() for i, s in enumerate(stocks)):
+        raise ValueError(f"이미 있습니다: {name}")
+    stock = {"name": name}
+    google = (fields.get("google") or "").strip()
+    if google and google != name:
+        stock["google"] = google
+    if fields.get("lang") == "en":
+        stock["lang"] = "en"
+    yahoo = (fields.get("yahoo") or "").strip().upper()
+    if yahoo:
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-^=]{0,14}", yahoo):
+            raise ValueError(f"야후 티커 형식이 아닙니다: {yahoo}")
+        if yahoo != stocks[idx].get("yahoo") and not list(yahoo_news({"yahoo": yahoo}, 1)):
+            raise ValueError(f"야후에 {yahoo} 뉴스가 없습니다. 티커를 확인해 주세요")
+        stock["yahoo"] = yahoo
+    for key in LIST_FIELDS:
+        words = [w.strip() for w in str(fields.get(key) or "").split(",") if w.strip()]
+        if words:
+            stock[key] = words
+    stocks[idx] = stock
+    save_watchlist(stocks)
+    return stock
+
+
 def remove_stock(name):
     stocks = load_watchlist()
     left = [s for s in stocks if s["name"] != name]

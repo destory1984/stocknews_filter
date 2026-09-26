@@ -22,5 +22,8 @@
  "tts_voice": "ko-KR-SunHiNeural",
  "tts_rate": "+0%",
  "tts_chime": "C:\\Windows\\Media\\Windows Notify Email.wav",
- "tts_quiet": ""
+ "quiet_on": false,
+ "tts_quiet": "",
+ "toast": true,
+ "telegram": false
 }
