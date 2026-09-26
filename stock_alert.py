@@ -465,11 +465,27 @@ def quiet_now(cfg: dict) -> bool:
 
 _speech = queue.Queue()
 
+# 목록 판 번호. 판별 기록이 늘 때마다 1 씩 오르고(Watcher.ver), 페이지가 그 판을 받아 가면 _shown 에 적힌다.
+# 음성은 화면에 먼저 뜬 뒤 읽는다 — 페이지가 그 판을 받아 갈 때까지, 길어야 SPEAK_WAIT_SEC 기다린다
+# (목록 창을 안 띄웠거나 뒤로 숨어 타이머가 느려졌어도 음성은 나가야 한다).
+SPEAK_WAIT_SEC = 6
+_shown = {"ver": 0}
+_shown_cv = threading.Condition()
+
+
+def mark_shown(ver: int):
+    with _shown_cv:
+        if ver > _shown["ver"]:
+            _shown["ver"] = ver
+            _shown_cv.notify_all()
+
 
 def _speech_worker(cfg: dict):
     # 한 판별 묶음에서 알림이 여럿 나와도 겹치지 않게 차례로 읽는다. 판별은 기다리지 않는다.
     while True:
-        text = _speech.get()
+        text, ver = _speech.get()
+        with _shown_cv:
+            _shown_cv.wait_for(lambda: _shown["ver"] >= ver, timeout=SPEAK_WAIT_SEC)
         try:
             speak(cfg, text)
         except Exception as e:
@@ -483,10 +499,11 @@ def spoken(r: dict, ko: str = "") -> str:
     return f"{src}, {title}" if src and title else title
 
 
-def say_alert(cfg: dict, text: str):
+def say_alert(cfg: dict, text: str, ver: int = 0):
+    """ver: 이 알림이 들어간 목록 판. 화면이 그 판을 보인 뒤에 읽는다 (0 이면 바로)."""
     if not cfg["tts"] or quiet_now(cfg) or not text:
         return
-    _speech.put(text)
+    _speech.put((text, ver))
 
 
 def tg_ready() -> bool:
@@ -754,6 +771,7 @@ class Watcher:
         self.first_seen = {}      # id → 처음 본 시각
         self.last_fetch = 0.0     # 마지막으로 RSS 를 받은 시각 (time.time)
         self.summarizer = Summarizer(self)
+        self.ver = 1              # 목록 판 번호. 알림이 나갈 때 오른다 (mark_shown 참고)
         self.fetch_note = "아직 받지 않음"
 
     def fetch(self):
@@ -870,7 +888,8 @@ class Watcher:
                     self.recent_alerts.append((time.time(), r["title"]))
                     toast(self.cfg, r, score, reason)
                     telegram_alert(self.cfg, r, score, reason)
-                    say_alert(self.cfg, spoken(r, ko) or say or topic or reason)
+                    self.ver += 1   # 목록 페이지가 1.5초 안에 알아채고 다시 그린다
+                    say_alert(self.cfg, spoken(r, ko) or say or topic or reason, self.ver)
 
     def fill_missing_ko(self, batch: list, result: dict):
         """판별 모델이 영어 제목의 ko 를 빈칸으로 돌려줄 때가 있다 (09-26 까지 영어 535건 중 16건).
@@ -955,9 +974,18 @@ def make_handler(watcher: Watcher):
                 self.send_response(303)
                 self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else ""))
                 self.end_headers()
+            elif u.path == "/ver":   # 페이지가 1.5초마다 묻는다. 바뀌었으면 목록을 다시 받는다
+                data = str(watcher.ver).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif u.path == "/":
                 watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
+                ver = watcher.ver
                 self.send_page(page(watcher, q.get("done"), bool(q.get("all"))))
+                mark_shown(ver)   # 이 판까지는 화면에 보였다. 기다리던 음성이 나간다
             else:
                 self.send_page("not found", 404)
 
@@ -1235,6 +1263,15 @@ async function refresh() {{
   }}
 }}
 setInterval(refresh, 15000);
+
+// 새 알림은 화면에 먼저 띄우고, 그다음 서버가 읽는다. 판 번호가 바뀌면 곧바로 다시 받는다.
+let ver = "{watcher.ver}";
+setInterval(async () => {{
+  try {{
+    const v = await (await fetch("/ver", {{cache: "no-store"}})).text();
+    if (v !== ver) {{ ver = v; refresh(); }}
+  }} catch (e) {{}}
+}}, 1500);
 
 // 같은 사건 묶음과 요약: 펼친 것은 자동 갱신 뒤에도 펼친 채로 둔다
 const opened = new Set(), openedSum = new Set();
