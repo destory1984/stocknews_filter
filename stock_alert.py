@@ -88,7 +88,11 @@ DEFAULTS = {
     # 판별 목록이 갱신될 때마다(15초) 켜졌는지 보고, 켜지면 밀린 것을 요약한다
     "summarize": True,
     "summary_hours": 48,           # 이 시간 안에 판별한 뉴스만 요약한다
-    "google_gap_sec": 30,          # 구글 링크 풀기 사이 간격. 자주 부르면 구글이 429 로 막는다
+    # 구글 링크 풀기 사이 간격. 자주 부르면 구글이 429 로 막는다. 30초 간격으로는 막힌 뒤 풀려도
+    # 네 건 만에 다시 막혔다 (2026-09-26 19:09~19:14). 요약은 급하지 않으니 길게 띄운다
+    "google_gap_sec": 180,
+    "google_alert_gap_sec": 30,    # 알리기 전 원문 날짜 보기는 알림이 늦으면 안 되니 이만큼만 띄운다
+    "google_block_min": 30,        # 막히면 이만큼 쉰다. 쉬고 나서도 막혀 있으면 두 배씩 (최대 네 배)
     # 구글 뉴스 RSS 는 옛 기사에 새 날짜를 붙여 다시 올리기도 한다 (6월 기사가 9월 날짜로 옴).
     # 알릴 만한 구글 기사는 알리기 전에 원문 날짜를 보고, 이보다 오래됐으면 알리지 않고 목록에서 숨긴다
     "stale_days": 3,
@@ -557,29 +561,39 @@ class Summarizer:
         self.alive = None          # 마지막으로 본 Ollama 상태
         self.checked = 0.0
         self.busy_until = 0.0      # 구글이 429 로 막으면 이때까지 구글 기사는 쉰다
+        self.blocks = 0            # 잇달아 막힌 횟수. 한 번 통하면 0 으로
         self.last_google = 0.0
         self.done = 0
         self.gate = threading.Lock()   # 구글 링크 풀기는 판별 루프와 요약 스레드가 함께 쓴다
         self.cache = {}                # id → 본문. 알리기 전에 받은 본문을 요약에 다시 쓴다 (메모리에만)
         self.dated = set()             # 원문 날짜를 본 id (Ollama 가 꺼져 있어도 옛 기사는 가린다)
 
-    def fetch_article(self, rec: dict, wait: bool = True):
-        """원문 (본문, 처음 나온 시각). 구글이 막는 중이면 article.Busy. 30초 간격을 지킨다."""
-        with self.gate:
-            if time.time() < self.busy_until:
-                raise article.Busy("구글이 잠시 막는 중")
-            gap = self.cfg["google_gap_sec"] - (time.time() - self.last_google)
-            if gap > 0:
-                if not wait:
-                    raise article.Busy("간격을 기다려야 함")
-                time.sleep(gap)
-            self.last_google = time.time()
-            try:
-                _, body, pub = article.fetch_body(rec["url"])
-            except article.Busy:
-                self.busy_until = time.time() + 1800
-                log("구글이 요청이 많다며 막음 → 30분 쉬고 다시")
-                raise
+    def fetch_article(self, rec: dict, urgent: bool = False):
+        """원문 (본문, 처음 나온 시각). 구글이 막는 중이면 article.Busy.
+        구글에 묻는 사이를 google_gap_sec 만큼 띄운다. urgent(알리기 전 날짜 보기)는 google_alert_gap_sec 만.
+        기다리는 동안 gate 를 쥐고 있지 않는다 — 요약이 3분 기다리는 사이 알림이 막히면 안 된다."""
+        gap = self.cfg["google_alert_gap_sec" if urgent else "google_gap_sec"]
+        while True:
+            with self.gate:
+                if time.time() < self.busy_until:
+                    raise article.Busy("구글이 잠시 막는 중")
+                left = gap - (time.time() - self.last_google)
+                if left <= 0:
+                    self.last_google = time.time()
+                    break
+            time.sleep(min(left, 5))
+        # 언제 물었는지 초 단위로 남긴다. 구글이 몇 번째에, 어떤 간격에서 막는지 보려면 있어야 한다
+        log(f"구글 링크 풀기 ({'알림 전' if urgent else '요약'}) {rec.get('title', '')[:50]}")
+        try:
+            _, body, pub = article.fetch_body(rec["url"])
+        except article.Busy:
+            with self.gate:
+                rest = self.cfg["google_block_min"] * 2 ** min(self.blocks, 2)
+                self.blocks += 1
+                self.busy_until = time.time() + rest * 60
+            log(f"구글이 요청이 많다며 막음 → {rest}분 쉬고 다시")
+            raise
+        self.blocks = 0
         self.cache[rec["id"]] = (body, pub)
         return body, pub
 
@@ -820,7 +834,7 @@ class Watcher:
                 if alert and r.get("feed") == "google":
                     # 알리기 전에 원문 날짜를 본다. 구글이 막는 중이거나 날짜를 못 찾으면 그대로 알린다
                     try:
-                        _, pub = self.summarizer.fetch_article(r)
+                        _, pub = self.summarizer.fetch_article(r, urgent=True)
                         self.summarizer.dated.add(r["id"])
                     except (article.Busy, article.Skip, requests.RequestException):
                         pass
@@ -1122,8 +1136,11 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         f"<td><a{' class=rated' if state else ''} href='{html.escape(r['url'])}' target=_blank"
         f"{' title=' + chr(39) + html.escape(r['title'], quote=True) + chr(39) if r.get('title_ko') else ''}>"
         f"{html.escape(r.get('title_ko') or r['title'])}</a>"
-        + (f"<div class=sum>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
-        + f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}{group}</div></td></tr>")
+        # 요약은 접어 둔다. '요약 ▾' 을 누르면 편다
+        + (f"<div class=sum data-id='{r['id']}'>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
+        + f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}"
+        + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else "")
+        + f"{group}</div></td></tr>")
 
 
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
@@ -1139,7 +1156,7 @@ body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margi
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.old{{color:#e0a44a;font-size:.8em}} .sum{{color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
@@ -1187,9 +1204,13 @@ async function refresh() {{
 }}
 setInterval(refresh, 15000);
 
-// 같은 사건 묶음: 펼친 것은 자동 갱신 뒤에도 펼친 채로 둔다
-const opened = new Set();
+// 같은 사건 묶음과 요약: 펼친 것은 자동 갱신 뒤에도 펼친 채로 둔다
+const opened = new Set(), openedSum = new Set();
 function applyOpen() {{
+  document.querySelectorAll("div.sum").forEach((d) => d.classList.toggle("show", openedSum.has(d.dataset.id)));
+  document.querySelectorAll("a.sumbtn").forEach((a) => {{
+    a.textContent = openedSum.has(a.dataset.id) ? "요약 ▴" : "요약 ▾";
+  }});
   document.querySelectorAll("tr.child").forEach((tr) => {{
     const g = [...tr.classList].find((c) => c.startsWith("g-"));
     tr.classList.toggle("show", opened.has(g.slice(2)));
@@ -1201,6 +1222,12 @@ function applyOpen() {{
 
 // 👍/👎 는 페이지를 옮기지 않고 기록한다. 그래서 스크롤 위치가 그대로 남는다.
 document.getElementById("list").addEventListener("click", async (e) => {{
+  const sb = e.target.closest("a.sumbtn");
+  if (sb) {{
+    openedSum.has(sb.dataset.id) ? openedSum.delete(sb.dataset.id) : openedSum.add(sb.dataset.id);
+    applyOpen();
+    return;
+  }}
   const g = e.target.closest("a.grp");
   if (g) {{
     opened.has(g.dataset.g) ? opened.delete(g.dataset.g) : opened.add(g.dataset.g);
