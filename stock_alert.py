@@ -1848,10 +1848,12 @@ def earnings_line() -> str:
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int,
               stock: str = "", counts: dict = None) -> str:
     sq = f"&s={quote(stock)}" if stock else ""
-    note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
-    note += (f"<a href='/?{sq[1:]}' style='text-decoration:underline'>숨기기</a></p>" if show_all else
+    # 모두 보기/숨기기 단추는 줄 맨 앞에 둔다 (설명 글 끝에 있으면 찾기 힘들다)
+    note += ("<p class=why><a class=tog href='/?" + sq[1:] + "'>숨기기</a> 숨긴 뉴스까지 모두 보는 중</p>" if show_all else
+             f"<p class=why><a class=tog href='/?all=1{sq}'>모두 보기</a> "
              f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사"
-             f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다. <a href='/?all=1{sq}' style='text-decoration:underline'>모두 보기</a></p>")
+             f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다.</p>")
+    note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다.</p>"
     # 종목별 보기 띠는 종목 줄 바로 밑에 둔다 (실적·급등락·최근 알림 칸 아래에 두면 내려가야 보인다)
     home = "/" + ("?all=1" if show_all else "")
     filt = (f"<p class=filt><b>{html.escape(stock)}</b> 뉴스만 보는 중 "
@@ -1876,10 +1878,10 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
-#recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}}
+#recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} #upd:empty{{display:none}}
 #recent .ra{{margin:2px 0}} #recent a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
@@ -1931,7 +1933,7 @@ async function refresh() {{
       if (src && dst) dst.innerHTML = src.innerHTML;
     }}
     applyOpen();
-    document.getElementById("upd").textContent = "자동 갱신 " + new Date().toLocaleTimeString("ko-KR", {{hour12: false}});
+    document.getElementById("upd").textContent = "";   // 갱신 시각은 보이지 않는다. 연결이 끊겼을 때만 적는다
   }} catch (e) {{
     document.getElementById("upd").textContent = "판별기에 연결할 수 없습니다 (" + new Date().toLocaleTimeString("ko-KR", {{hour12: false}}) + ")";
   }}
