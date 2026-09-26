@@ -705,7 +705,10 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
     rows = []
     for head in order:
         kids = members[head["id"]]
-        gid = hashlib.md5(head.get("topic", head["id"]).encode()).hexdigest()[:10] if kids else ""
+        # 묶음 id: 사건 이름만 쓰면 6시간 넘게 떨어져 나뉜 같은 이름의 묶음이 함께 펼쳐진다.
+        # 가장 오래된 뉴스를 섞는다. 새 뉴스는 위에 붙으니 자동 갱신 뒤에도 id 가 그대로다.
+        gid = (hashlib.md5(f"{head.get('topic', '')}|{kids[-1]['id']}".encode()).hexdigest()[:10]
+               if kids else "")
         rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids))
         rows.extend(row_html(k, fb, done, qs, child_of=gid) for k in kids)
     note = "<p class=ok>반응을 기록했습니다. 다음 판별부터 반영됩니다.</p>" if done else ""
