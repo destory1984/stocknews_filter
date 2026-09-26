@@ -75,6 +75,7 @@ DEFAULTS = {
     "port": 18766,                 # 18765 는 saveticker 필터링
     "examples": 15,                # 프롬프트에 넣을 👍, 👎 각각의 최대 개수
     "dup_ratio": 0.6,              # 최근 알린 제목과 이만큼 비슷하면 알리지 않는다
+    "hide_sources": [],            # 판별 목록에서 가릴 언론사 (언론사 성적표에서 고른다). 판별·알림은 그대로 한다
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
     "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
@@ -981,6 +982,8 @@ def make_handler(watcher: Watcher):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif u.path == "/sources":
+                self.send_page(sources_page(watcher))
             elif u.path == "/":
                 watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
                 ver = watcher.ver
@@ -1063,6 +1066,20 @@ def fetch_now(watcher: Watcher, body: dict) -> dict:
     return {"ok": True, "new": n}
 
 
+def hide_source(watcher: Watcher, body: dict) -> dict:
+    """언론사 성적표의 가리기/되살리기. 목록에서만 가린다 (판별·알림은 그대로)."""
+    src = str(body.get("source") or "").strip()
+    if not src:
+        return {"ok": False, "msg": "언론사 이름이 없다"}
+    muted = [x for x in watcher.cfg.get("hide_sources") or [] if x != src]
+    if body.get("hide"):
+        muted.append(src)
+    watcher.cfg["hide_sources"] = sorted(muted)
+    settings.save({k: v for k, v in watcher.cfg.items() if not k.startswith("_")}, CONFIG)
+    log(f"언론사 {'가림' if body.get('hide') else '되살림'}: {src}")
+    return {"ok": True, "hidden": bool(body.get("hide"))}
+
+
 def watch_change(watcher: Watcher, body: dict) -> dict:
     """종목 추가·고치기·빼기. 추가하면 다음 차례(10초 안)에 바로 뉴스를 받는다."""
     op, name = body.get("op"), str(body.get("name") or "")
@@ -1091,7 +1108,8 @@ def mb_rows(watcher: Watcher, body: dict) -> dict:
 
 
 SETTING_ROUTES = {"/settings": set_setting, "/say": say_test, "/telegram-test": telegram_test,
-                  "/fetch": fetch_now, "/watch": watch_change, "/mb": mb_rows}
+                  "/fetch": fetch_now, "/watch": watch_change, "/mb": mb_rows,
+                  "/hide-source": hide_source}
 
 
 def load_stocks() -> list:
@@ -1117,6 +1135,66 @@ SOURCE_NAMES = {"finance.yahoo.com": "Yahoo Finance", "v.daum.net": "다음"}
 FB_LABELS = {"10": "🔔10점", "1": "👍", "0": "👎", "00": "🔕0점"}
 
 
+def sources_page(watcher: Watcher) -> str:
+    """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서만 안 보인다."""
+    muted = set(watcher.cfg.get("hide_sources") or [])
+    stats = sorted(store.source_stats(), key=lambda r: -r["n"])
+    th = watcher.cfg["threshold"]
+    first = min((r["first"] for r in stats if r["first"]), default="")
+    rows = []
+    for r in stats:
+        src = r["source"] or ""
+        name = SOURCE_NAMES.get(src, src) or "(언론사 없음)"
+        off = src in muted
+        rows.append(
+            f"<tr{' class=off' if off else ''}><td>{html.escape(name)}"
+            f"{' <small>' + html.escape(src) + '</small>' if name != src and src else ''}</td>"
+            f"<td data-v={r['n']}>{r['n']}</td><td data-v={r['avg']:.2f}>{r['avg']:.1f}</td>"
+            f"<td data-v={r['hi'] or 0}>{r['hi'] or ''}</td>"
+            f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td>"
+            f"<td><button class=hs data-src=\"{html.escape(src, quote=True)}\" data-hide={'0' if off else '1'}>"
+            f"{'되살리기' if off else '가리기'}</button></td></tr>")
+    return f"""<!doctype html><meta charset=utf-8><title>언론사 성적표 · 종목 뉴스 필터</title>
+<style>
+body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
+a{{color:#8ab4f8}} h2{{margin:0 0 4px;font-size:1.3em}} .why{{color:#8a9099;font-size:.86em}}
+table{{border-collapse:collapse}} th,td{{padding:4px 10px;border-bottom:1px solid #2a2d33;text-align:right}}
+th:first-child,td:first-child{{text-align:left}} th{{cursor:pointer;color:#b8bec6;font-weight:600;white-space:nowrap}}
+td small{{color:#8a9099}} tr.off td{{color:#6b7078}}
+button.hs{{font:inherit;font-size:.85em;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:6px;padding:2px 8px;cursor:pointer}}
+tr.off button.hs{{background:#3a4a6b}}
+</style>
+<h2>언론사 성적표</h2>
+<p class=why><a href='/'>← 판별 목록</a> · {html.escape(first[:10])} 부터 판별한 {sum(r['n'] for r in stats)}건, 언론사 {len(stats)}곳 ·
+'알림' 은 {th}점 이상 · 👍·👎 는 🔔10·🔕0 포함, 뉴스마다 마지막 반응만 ·
+가린 언론사는 판별 목록에서만 안 보인다 (판별·알림은 그대로, '모두 보기' 로 볼 수 있다) · 머리글을 누르면 정렬</p>
+<table id=t><thead><tr><th>언론사</th><th>건수</th><th>평균 점수</th><th>알림</th><th>👍</th><th>👎</th><th>{len(muted)}곳 가림</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table>
+<script>
+document.querySelectorAll("#t th").forEach((th, i) => th.onclick = () => {{
+  const body = document.querySelector("#t tbody"), rows = [...body.rows];
+  const key = (tr) => i === 0 ? tr.cells[0].textContent.toLowerCase() : Number(tr.cells[i].dataset.v || 0);
+  const dir = th.dataset.dir === "down" ? 1 : -1;
+  document.querySelectorAll("#t th").forEach((x) => delete x.dataset.dir);
+  th.dataset.dir = dir === -1 ? "down" : "up";
+  rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * (i === 0 ? -dir : dir));
+  rows.forEach((tr) => body.appendChild(tr));
+}});
+document.querySelector("#t tbody").addEventListener("click", async (e) => {{
+  const b = e.target.closest("button.hs");
+  if (!b) return;
+  const hide = b.dataset.hide === "1";
+  const r = await fetch("/hide-source", {{method: "POST", headers: {{"X-Settings": "yes", "Content-Type": "application/json"}},
+    body: JSON.stringify({{source: b.dataset.src, hide}})}});
+  const d = r.ok ? await r.json() : null;
+  if (!d || !d.ok) {{ alert("바꾸지 못했습니다" + (d && d.msg ? ": " + d.msg : "")); return; }}
+  b.closest("tr").classList.toggle("off", hide);
+  b.dataset.hide = hide ? "0" : "1";
+  b.textContent = hide ? "되살리기" : "가리기";
+}});
+</script>"""
+
+
 def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
     fb = {k: fb_key(v) for k, v in latest_feedback().items()}
     recs = sorted(watcher.judged.values(), key=lambda r: r.get("created_at", ""), reverse=True)
@@ -1124,10 +1202,13 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
     # 방금 누른 것은 기록됐다는 표시를 위해, 👍·10점 준 것은 점수와 상관없이 남긴다.
     low = watcher.cfg["hide_max_score"]
 
+    muted = set(watcher.cfg.get("hide_sources") or [])
+
     def hide(r):
         if r["id"] == done or fb.get(r["id"]) in ("1", "10"):
             return False
-        return fb.get(r["id"]) in ("0", "00") or r["score"] <= low or bool(r.get("stale"))
+        return (fb.get(r["id"]) in ("0", "00") or r["score"] <= low or bool(r.get("stale"))
+                or r.get("source", "") in muted)
 
     hidden = 0 if show_all else sum(1 for r in recs if hide(r))
     if not show_all:
@@ -1206,7 +1287,8 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
     note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
-             f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사 {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
+             f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사"
+             f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
     stocks = load_stocks()
     names = " · ".join(html.escape(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
     menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
@@ -1224,7 +1306,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline>종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·

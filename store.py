@@ -172,6 +172,17 @@ def summary_todo(min_score: int, hours: int = 48) -> list:
 # feedback
 # ─────────────────────────────────────────────────────────────
 
+def source_stats() -> list:
+    """언론사마다 판별 건수, 평균 점수, 7점 이상 건수, 👍/👎 (🔔10·🔕0 포함, 뉴스마다 마지막 반응만)."""
+    return [dict(r) for r in con().execute("""
+        select j.source, count(*) n, avg(j.score) avg, sum(j.score >= 7) hi,
+               sum(f."like" = 1) up, sum(f."like" = 0) down, min(j.created_at) first
+        from judged j
+        left join (select id, "like" from feedback
+                   where n in (select max(n) from feedback group by id)) f on f.id = j.id
+        group by j.source""")]
+
+
 def add_feedback(rec: dict):
     like = rec.get("like")
     _commit('insert into feedback (id, title, "like", strong, at) values (?,?,?,?,?)',
