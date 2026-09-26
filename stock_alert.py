@@ -1241,7 +1241,8 @@ def make_handler(watcher: Watcher):
             elif u.path == "/":
                 watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
                 ver = watcher.ver
-                self.send_page(page(watcher, q.get("done"), bool(q.get("all"))))
+                n = int(q["n"]) if q.get("n", "").isdigit() else PAGE_SIZE
+                self.send_page(page(watcher, q.get("done"), bool(q.get("all")), n))
                 mark_shown(ver)   # 이 판까지는 화면에 보였다. 기다리던 음성이 나간다
             else:
                 self.send_page("not found", 404)
@@ -1532,7 +1533,10 @@ document.querySelector("#t tbody").addEventListener("click", async (e) => {{
 </script>"""
 
 
-def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
+PAGE_SIZE = 50    # 목록에 한 번에 보이는 뉴스 수 (같은 사건으로 접힌 것도 센다). 맨 아래 '더 보기' 를 누르면 이만큼씩 더
+
+
+def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int = PAGE_SIZE) -> str:
     fb = {k: fb_key(v) for k, v in latest_feedback().items()}
     recs = sorted(watcher.judged.values(), key=lambda r: r.get("created_at", ""), reverse=True)
     # 👎·0점 준 뉴스와 점수가 낮은 뉴스는 기본으로 숨긴다.
@@ -1550,7 +1554,8 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
     hidden = 0 if show_all else sum(1 for r in recs if hide(r))
     if not show_all:
         recs = [r for r in recs if not hide(r)]
-    recs = recs[:150]
+    more = max(0, len(recs) - limit)
+    recs = recs[:limit]
     qs = "&all=1" if show_all else ""
     # 같은 사건(topic)은 가장 최근 뉴스 한 줄로 접는다. 6시간 넘게 떨어지면 다른 묶음으로 본다.
     heads, members, order = {}, {}, []
@@ -1574,6 +1579,9 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
         rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids))
         rows.extend(row_html(k, fb, done, qs, child_of=gid) for k in kids)
     note = "<p class=ok>반응을 기록했습니다. 다음 판별부터 반영됩니다.</p>" if done else ""
+    if more:   # 목록 표 안에 두어야 15초 자동 갱신 때 같이 바뀐다
+        rows.append(f"<tr><td colspan=4 style='text-align:center'><a id=more class=grp>"
+                    f"더 보기 (남은 {more}건" + (f" 가운데 {PAGE_SIZE}건" if more > PAGE_SIZE else "") + ")</a></td></tr>")
     return page_html(watcher, rows, note, show_all, low, hidden, sum(1 for v in fb.values() if v))
 
 
@@ -1755,9 +1763,11 @@ document.getElementById("reset-all").onclick = (e) => resetRecords("all",
 // 15초마다 목록만 바꿔 끼운다. 스크롤 위치는 그대로 남는다.
 // 방금 누른 뉴스는 10초 동안 목록에 남긴다 (👎 해도 바로 사라지지 않게, 잘못 누르면 되돌릴 수 있게)
 let keep = null, keepAt = 0;
+let limit = {PAGE_SIZE};   // '더 보기' 를 누를 때마다 늘어난다. 자동 갱신도 이만큼 받는다
 async function refresh() {{
   if (keep && Date.now() - keepAt > 10000) keep = null;
   const params = new URLSearchParams({{{"all: 1" if show_all else ""}}});
+  if (limit > {PAGE_SIZE}) params.set("n", limit);
   if (keep) params.set("done", keep);
   try {{
     const r = await fetch("/?" + params, {{cache: "no-store"}});
@@ -1828,6 +1838,12 @@ document.getElementById("list").addEventListener("click", async (e) => {{
   if (sb) {{
     openedSum.has(sb.dataset.id) ? openedSum.delete(sb.dataset.id) : openedSum.add(sb.dataset.id);
     applyOpen();
+    return;
+  }}
+  if (e.target.closest("#more")) {{
+    limit += {PAGE_SIZE};
+    e.target.textContent = "불러오는 중…";
+    await refresh();
     return;
   }}
   const g = e.target.closest("a.grp");
