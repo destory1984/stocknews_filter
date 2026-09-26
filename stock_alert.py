@@ -1671,6 +1671,29 @@ def spoken_when(at: datetime, now: datetime) -> str:
     return f"{day} {part} {h12}시" + (f" {at.minute}분" if at.minute else "")
 
 
+RECENT_ALERT_HOURS = 6
+RECENT_ALERT_MAX = 5
+
+
+def recent_alerts_html(watcher: Watcher) -> str:
+    """목록 위 '최근 알림': 알림을 보낸 뉴스를 알린 순서대로. 목록은 기사 시각 순이라,
+    늦게 들어와 알린 뉴스는 목록 아래에 묻힌다 (PC 가 잠들었다 깼을 때, 구글이 늦게 올린 기사)."""
+    cutoff = (datetime.now(KST) - timedelta(hours=RECENT_ALERT_HOURS)).isoformat(timespec="seconds")
+    recs = sorted((r for r in watcher.judged.values() if r.get("alerted") and r.get("at", "") >= cutoff),
+                  key=lambda r: r["at"], reverse=True)[:RECENT_ALERT_MAX]
+    if not recs:
+        return "<div id=recent></div>"
+    rows = []
+    for r in recs:
+        at = datetime.fromisoformat(r["at"]).astimezone(KST)
+        src = SOURCE_NAMES.get(r.get("source", ""), r.get("source", ""))
+        rows.append(f"<div class=ra><span class=why>{at:%H:%M}</span> <b>{r['score']}</b> "
+                    f"<a href=\"{html.escape(r['url'])}\" target=_blank>{html.escape(r.get('title_ko') or r['title'])}</a>"
+                    f" <span class=why>{html.escape(src)}</span></div>")
+    return (f"<div id=recent><div class=why>최근 알림 ({RECENT_ALERT_HOURS}시간 안, 알린 순서)</div>"
+            + "".join(rows) + "</div>")
+
+
 def moves_html(watcher: Watcher) -> str:
     """목록 위 급등락 칸: 최근 6시간 것만, 새것부터. 원인일 만한 뉴스를 밑에 붙인다."""
     cutoff = datetime.now(KST) - timedelta(hours=6)
@@ -1729,7 +1752,9 @@ table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
-#moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+#moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
+#recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}}
+#recent .ra{{margin:2px 0}} #recent a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
@@ -1740,6 +1765,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 <p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {earnings_line()}
 {moves_html(watcher)}
+{recent_alerts_html(watcher)}
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
@@ -1773,8 +1799,10 @@ async function refresh() {{
     const r = await fetch("/?" + params, {{cache: "no-store"}});
     const doc = new DOMParser().parseFromString(await r.text(), "text/html");
     document.getElementById("list").innerHTML = doc.getElementById("list").innerHTML;
-    const mv = doc.getElementById("moves");
-    if (mv) document.getElementById("moves").innerHTML = mv.innerHTML;
+    for (const id of ["moves", "recent"]) {{
+      const src = doc.getElementById(id), dst = document.getElementById(id);
+      if (src && dst) dst.innerHTML = src.innerHTML;
+    }}
     applyOpen();
     document.getElementById("upd").textContent = "자동 갱신 " + new Date().toLocaleTimeString("ko-KR", {{hour12: false}});
   }} catch (e) {{
