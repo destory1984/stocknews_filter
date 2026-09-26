@@ -600,16 +600,19 @@ class Summarizer:
         self.checked = time.time()
         return self.alive
 
-    def pending(self) -> list:
-        todo = store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"])
-        if time.time() < self.busy_until:
+    def pending(self, include_busy: bool = False) -> list:
+        """요약할 것. 야후는 목록에 보이는 뉴스 모두, 구글은 기준 점수(알림 대상) 이상만.
+        구글 기사는 원문 주소를 풀 때마다 구글에 묻는데, 300건을 30초 간격으로 물어도 429 로 막혔다 (2026-09-26)."""
+        todo = [r for r in store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"])
+                if r.get("feed") != "google" or r["score"] >= self.cfg["threshold"]]
+        if not include_busy and time.time() < self.busy_until:
             todo = [r for r in todo if r.get("feed") != "google"]
         return todo
 
     def status(self) -> str:
         if not self.cfg.get("summarize"):
             return "요약 꺼짐"
-        n = len(store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"]))
+        n = len(self.pending(include_busy=True))
         if self.alive is False:
             return f"요약: Ollama 꺼짐 · 켜지면 {n}건 요약" if n else "요약: Ollama 꺼짐"
         if time.time() < self.busy_until:
