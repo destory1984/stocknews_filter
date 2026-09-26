@@ -820,6 +820,7 @@ class Watcher:
                 log(f"판별 실패: {e}")
                 return
             log(f"{len(batch)}건 판별 {time.time() - t0:.1f}초 ({by})")
+            self.fill_missing_ko(batch, result)
             for r in batch:
                 if r["id"] not in result:
                     continue
@@ -859,9 +860,26 @@ class Watcher:
                     telegram_alert(self.cfg, r, score, reason)
                     say_alert(self.cfg, spoken(r, ko) or say or topic or reason)
 
+    def fill_missing_ko(self, batch: list, result: dict):
+        """판별 모델이 영어 제목의 ko 를 빈칸으로 돌려줄 때가 있다 (09-26 까지 영어 535건 중 16건).
+        그런 것만 번역 프롬프트로 한 번 더 묻는다. 그래도 못 하면 원문 제목을 그대로 쓴다."""
+        miss = [r for r in batch if r["id"] in result and not result[r["id"]][4] and is_english(r["title"])]
+        if not miss:
+            return
+        try:
+            kos = translate_titles(self.cfg, [r["title"] for r in miss])
+        except Exception as e:
+            log(f"번역 다시 묻기 실패: {type(e).__name__}: {str(e)[:100]}")
+            return
+        for r, ko in zip(miss, kos):
+            if ko:
+                result[r["id"]] = result[r["id"]][:4] + (ko,) + result[r["id"]][5:]
+        log(f"판별이 빠뜨린 번역 {sum(1 for k in kos if k)}/{len(miss)}건 다시 번역")
+
     def backfill_translations(self, hours: int = 48, size: int = 20):
-        """번역이 생기기 전에 판별한 영어 제목을 한 번 번역해 둔다 (시작할 때 뒤에서)."""
-        recs = [r for r in self.recent(hours) if "title_ko" not in r and is_english(r.get("title", ""))]
+        """번역이 없는 영어 제목을 한 번 번역해 둔다 (시작할 때 뒤에서).
+        번역이 생기기 전 기록(칸 없음)과, 판별 모델이 ko 를 빈칸으로 준 기록("")을 함께 한다."""
+        recs = [r for r in self.recent(hours) if not r.get("title_ko") and is_english(r.get("title", ""))]
         done = 0
         for k in range(0, len(recs), size):
             batch = recs[k:k + size]
@@ -871,6 +889,8 @@ class Watcher:
                 log(f"번역 실패: {type(e).__name__}: {str(e)[:100]}")
                 return
             for r, ko in zip(batch, kos):
+                if not ko and "title_ko" in r:
+                    continue   # 이번에도 못 했다. 빈칸은 이미 적혀 있다
                 r["title_ko"] = ko
                 store.save_judged(r)
                 done += bool(ko)
