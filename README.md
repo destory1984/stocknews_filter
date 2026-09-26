@@ -120,7 +120,7 @@ saveticker_filter 와 같다.
 접속하는 것을 금하므로, 서버에서 페이지를 받지 않고 **사용자가 Edge 에 띄워 둔 탭을 확장이 읽는다.**
 
 1. `edge://extensions` → 개발자 모드 → 압축 풀린 파일 로드 → `extension` 폴더.
-2. Edge 에 https://www.marketbeat.com/ratings/ 를 열어 둔다. 확장이 5분마다 새로 고치고, 표를 알리미(18766)로 넘긴다.
+2. Edge 에 https://www.marketbeat.com/ratings/ (또는 /ratings/us/) 를 열어 둔다. 확장이 5분마다 새로 고치고, 표를 알리미(18766)로 넘긴다.
    오른쪽 아래 초록 딱지에 넘긴 줄 수가 나온다.
 3. 새 줄이 처음 보인 시각이 `data/stocknews.db` 의 `mb_ratings` 에 쌓인다. `python mb_report.py` 로 본다.
 
