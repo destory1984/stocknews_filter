@@ -79,7 +79,8 @@ saveticker_filter 와 같다.
 
 - 새 뉴스를 최대 10건씩 모아(또는 90초 기다렸다가) 한 번에 묻는다. 프롬프트에 `interests.md` 와 최근 반응(🔔10·👍·👎·🔕0)이 들어간다.
 - 뉴스마다 사건 이름을 붙여 같은 소식을 한 줄로 접는다. 알림은 같은 사건이면 한 시간에 한 번만 보낸다.
-- 알림은 말로도 읽는다. saveticker_filter 와 구별되게 말머리 소리를 `Windows Notify Email.wav` 로 바꿨다.
+- 알림은 말로도 읽는다. 말머리 소리 뒤에 "언론사, 제목" 을 읽는다 (영어 제목은 번역한 제목).
+  saveticker_filter 와 구별되게 말머리 소리를 `Windows Notify Email.wav` 로 바꿨다.
   `python stock_alert.py --say "삼성전자 목표가 상향"` 으로 들어 볼 수 있다.
 - 나온 지 120분(`max_age_min`)이 넘은 뉴스는 목록에만 올리고 알리지 않는다. saveticker_filter 는 60분이다.
   구글 뉴스는 기사가 나온 뒤 늦게 잡히기도 해서 늘렸다.

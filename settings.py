@@ -169,14 +169,14 @@ def menu(cfg: dict, stocks: list) -> str:
        "알림을 텔레그램으로도 보낸다. 봇 토큰과 대화방은 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 에서 읽는다 (RSI 모니터와 같은 것).")}
 
   <div class=mhead>소리 <small>꺼 둔 때도 알림 목록에는 쌓인다</small></div>
-  {row(_label("음성으로 읽기", "말머리 소리 뒤에 제목을 줄여 읽는다", "LLM 이 제목을 12자 안팎으로 줄인 말(예: 솔리다임 美 IPO 수순)을 Edge 음성으로 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다."), _switch(cfg, "tts", "음성으로 읽기"),
-       "LLM 이 제목을 12자 안팎으로 줄인 말(예: 솔리다임 美 IPO 수순)을 Edge 음성으로 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다.")}
+  {row(_label("음성으로 읽기", "말머리 소리 뒤에 언론사와 제목을 읽는다", "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다."), _switch(cfg, "tts", "음성으로 읽기"),
+       "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다.")}
   {row(_label("목소리"), _select(cfg, "tts_voice", "목소리"))}
   {row(_label("빠르기"), _select(cfg, "tts_rate", "빠르기"))}
   {row(_label("말머리 소리", "saveticker 는 Windows Notify Messaging"), _select(cfg, "tts_chime", "말머리 소리"))}
   {row(_label("조용한 시각", "이 PC 시각. 23:00~07:00 처럼 자정을 넘어도 된다"), _switch(cfg, "quiet_on", "조용한 시각"))}
   <div class="mrow qtimes"><input type=time id=qfrom value="{qfrom}" aria-label="조용한 시각 시작"> ~ <input type=time id=qto value="{qto}" aria-label="조용한 시각 끝"></div>
-  <div class=mrow><input id=saytext value="삼성전자 목표가 상향" aria-label="읽어 볼 말"><button type=button class=hbtn id=soundtest title="고른 목소리로 한 번 읽는다">TTS 테스트</button></div>
+  <div class=mrow><input id=saytext value="연합뉴스, 삼성전자 목표주가 상향" aria-label="읽어 볼 말"><button type=button class=hbtn id=soundtest title="고른 목소리로 한 번 읽는다">TTS 테스트</button></div>
 
   <div class=mhead>수집 · 판별</div>
   {row(_label("뉴스 받는 간격", "", "구글 뉴스 RSS 는 종목마다 한 번, 야후는 티커마다 한 번 부른다. 너무 자주 부르면 막힐 수 있다."), "<span class=mbtns><button type=button class=hbtn id=fetchnow title='지금 한 번 받는다'>지금 받기</button>" + _select(cfg, "fetch_min", "뉴스 받는 간격") + "</span>",

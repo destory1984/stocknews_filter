@@ -76,7 +76,7 @@ DEFAULTS = {
     "examples": 15,                # 프롬프트에 넣을 👍, 👎 각각의 최대 개수
     "dup_ratio": 0.6,              # 최근 알린 제목과 이만큼 비슷하면 알리지 않는다
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
-    "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → 제목을 줄인 말 ("이란 휴전안 거부")
+    "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
     "tts_rate": "+0%",
     "tts_chime": r"C:\Windows\Media\Windows Notify Email.wav",   # saveticker(Messaging)·RSI 와 다른 소리
@@ -472,6 +472,13 @@ def _speech_worker(cfg: dict):
             log(f"음성 오류: {type(e).__name__}: {e}")
 
 
+def spoken(r: dict, ko: str = "") -> str:
+    """음성으로 읽을 말: "언론사, 제목". 영어 제목은 번역한 제목을 읽는다."""
+    title = (ko or r.get("title_ko") or r.get("title") or "").strip()
+    src = SOURCE_NAMES.get(r.get("source", ""), r.get("source", "")).strip()
+    return f"{src}, {title}" if src and title else title
+
+
 def say_alert(cfg: dict, text: str):
     if not cfg["tts"] or quiet_now(cfg) or not text:
         return
@@ -836,7 +843,7 @@ class Watcher:
                     self.recent_alerts.append((time.time(), r["title"]))
                     toast(self.cfg, r, score, reason)
                     telegram_alert(self.cfg, r, score, reason)
-                    say_alert(self.cfg, say or topic or reason)
+                    say_alert(self.cfg, spoken(r, ko) or say or topic or reason)
 
     def backfill_translations(self, hours: int = 48, size: int = 20):
         """번역이 생기기 전에 판별한 영어 제목을 한 번 번역해 둔다 (시작할 때 뒤에서)."""
