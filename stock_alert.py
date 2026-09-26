@@ -835,6 +835,12 @@ document.getElementById("list").addEventListener("click", async (e) => {{
 </script>"""
 
 
+class Server(ThreadingHTTPServer):
+    # HTTPServer 는 SO_REUSEADDR 를 켠다. 윈도우에서는 그러면 두 번째 실행도 같은 포트를 잡아
+    # "이미 실행 중" 검사가 통하지 않고 알림이 두 번 온다 (시작프로그램 + 손으로 켠 것).
+    allow_reuse_address = False
+
+
 def main():
     ap = argparse.ArgumentParser(description="종목 뉴스 알림")
     ap.add_argument("--test", type=int, metavar="N", help="최근 N건만 판별해 출력하고 끝낸다")
@@ -876,7 +882,7 @@ def main():
 
     watcher = Watcher(cfg)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", cfg["port"]), make_handler(watcher))
+        server = Server(("127.0.0.1", cfg["port"]), make_handler(watcher))
     except OSError as e:
         # 이미 하나 떠 있는 경우가 대부분이다. 종료 코드 3 이면 stock_alert.bat 이 다시 띄우지 않는다.
         log(f"포트 {cfg['port']} 를 쓸 수 없다 ({e}). 이미 실행 중이거나, {CONFIG.name} 의 port 를 바꿔라.")
