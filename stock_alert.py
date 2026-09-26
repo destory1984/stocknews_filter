@@ -827,6 +827,24 @@ class Watcher:
             out.append(r)
         return sorted(out, key=lambda r: (self.is_late(r), r["ts"]))
 
+    def drop_junk(self, todo: list) -> list:
+        """옵션 시세 페이지·소송 모집 광고 같은 것은 모델에 묻지 않고 0점으로 적는다 (stocknews.JUNK).
+        목록에서는 점수가 낮아 숨고, '모두 보기' 에서 📏 로 보인다."""
+        rest = []
+        for r in todo:
+            why = stocknews.junk_reason(r["title"])
+            if not why:
+                rest.append(r)
+                continue
+            rec = {"id": r["id"], "title": r["title"], "url": r["url"], "source": r.get("source", ""),
+                   "tickers": r.get("tickers", ""), "created_at": r["created_at"], "score": 0,
+                   "reason": f"규칙: {why}", "topic": "", "say": "", "title_ko": "", "alerted": False,
+                   "late": False, "by": "rule", "at": datetime.now(KST).isoformat(timespec="seconds")}
+            self.judged[r["id"]] = rec
+            store.save_judged(rec)
+            log(f"   0 [규칙: {why}] {r['title'][:70]}")
+        return rest
+
     def is_late(self, r: dict) -> bool:
         """알리기엔 늦은 뉴스인가. PC 가 잠든 사이 나온 뉴스를 깨어나서 한꺼번에 울리지 않게."""
         return r["ts"] < datetime.now(timezone.utc) - timedelta(minutes=self.cfg["max_age_min"])
@@ -835,6 +853,7 @@ class Watcher:
         self.fetch()
         self.summarizer.poke()
         todo = self.pending()
+        todo = self.drop_junk(todo)
         if not todo:
             return
         # 한 건씩 바로 물으면 호출마다 관심사·예시를 다시 보내야 한다. 조금 모았다가 묻는다.
@@ -913,7 +932,8 @@ class Watcher:
     def backfill_translations(self, hours: int = 48, size: int = 20):
         """번역이 없는 영어 제목을 한 번 번역해 둔다 (시작할 때 뒤에서).
         번역이 생기기 전 기록(칸 없음)과, 판별 모델이 ko 를 빈칸으로 준 기록("")을 함께 한다."""
-        recs = [r for r in self.recent(hours) if not r.get("title_ko") and is_english(r.get("title", ""))]
+        recs = [r for r in self.recent(hours)
+                if not r.get("title_ko") and is_english(r.get("title", "")) and r.get("by") != "rule"]
         done = 0
         for k in range(0, len(recs), size):
             batch = recs[k:k + size]
@@ -1295,7 +1315,8 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         group = (f" <a class=grp data-g='{gid}'>같은 사건 +{len(kids)}건 (최고 {top}점) ▾</a>")
     # 누가 판별했는지: 🦙 Ollama, ✴ Claude
     by = {"ollama": "<div class=by title='Ollama 가 판별'>🦙</div>",
-          "claude": "<div class='by cl' title='Claude 가 판별'>✴</div>"}.get(r.get("by"), "")
+          "claude": "<div class='by cl' title='Claude 가 판별'>✴</div>",
+          "rule": "<div class=by title='모델에 묻지 않고 규칙으로 거름'>📏</div>"}.get(r.get("by"), "")
     topic = f"<span class=tp>{html.escape(r['topic'])}</span>" if r.get("topic") else ""
     source = SOURCE_NAMES.get(r.get("source", ""), r.get("source", ""))
     src = f"<span class=src>{html.escape(source)}</span>" if source else ""

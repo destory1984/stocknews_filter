@@ -103,6 +103,35 @@ def yahoo_news(stock, days):
 SOURCES = {"google": google_news, "yahoo": yahoo_news}
 
 
+# 제목만 보고 뉴스가 아닌 것을 가른다. 모델에 묻지 않고 0점으로 적는다.
+# 2026-09-26 까지 판별한 672건에 대 보니 60건쯤 걸렸고, 모두 모델도 2점 이하로 매긴 것이었다.
+JUNK = (
+    ("옵션 시세 페이지", re.compile(r"\b[A-Z]{1,6}\d{6}[CP]\d{8}\b")),   # DRAM261009P00059500
+    ("시세 페이지", re.compile(r"stock price, news, quote|interactive stock chart|Live Price, Market Cap", re.I)),
+    ("소송 모집 광고", re.compile(
+        r"Class Action Alert|Investors Who Lost|Encourages .{0,80}Investors to (Contact|Secure|Inquire)"
+        r"|Reminds .{0,80}Investors|Investors (Are )?(Urged|Reminded|Encouraged) to|\bROSEN, A LEADING"
+        r"|Levi & Korsinsky|Kaplan Fox|Pomerantz Law|Bronstein, Gewirtz|Faruqi & Faruqi|Glancy Prongay"
+        r"|Bragar Eagel|Schall Law|Portnoy Law|Robbins Geller|Hagens Berman|Kessler Topaz", re.I)),
+    ("기관 보유 공시", re.compile(
+        r"\b(Holdings?|Stake|Position) (in .{1,60} )?(Lifted|Lowered|Raised|Trimmed|Boosted|Cut|Reduced|Increased"
+        r"|Decreased) by|\bShares of .{1,80} (Acquired|Sold|Bought|Purchased) by"
+        r"|\b(Buys|Sells|Acquires|Purchases) [\d,]+ Shares of", re.I)),
+)
+# 임원 매매는 기관 보유 공시와 모양이 같아도 볼 만하니 남긴다
+INSIDER = re.compile(r"\bInsider\b|\bCEO\b|\bCFO\b|\bDirector\b|\bOfficer\b", re.I)
+
+
+def junk_reason(title: str) -> str:
+    """뉴스가 아닌 제목이면 그 까닭, 아니면 ""."""
+    for why, pat in JUNK:
+        if pat.search(title or ""):
+            if why == "기관 보유 공시" and INSIDER.search(title):
+                continue
+            return why
+    return ""
+
+
 def keep(item, stock, since):
     if item["published"] and item["published"] < since:
         return False
