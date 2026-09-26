@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "stocknews_filter MarketBeat 측정",
+  "version": "0.1.0",
+  "description": "브라우저에 띄운 MarketBeat 목표가 변경 페이지를 5분마다 새로 고치고, 표를 종목 뉴스 필터(127.0.0.1:18766)에 넘겨 새 줄이 처음 보인 시각을 기록한다.",
+  "content_scripts": [
+    {
+      "matches": ["https://www.marketbeat.com/ratings/"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": { "service_worker": "background.js" },
+  "host_permissions": ["http://127.0.0.1:18766/*"]
+}

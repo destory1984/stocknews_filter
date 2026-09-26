@@ -114,6 +114,18 @@ saveticker_filter 와 같다.
 예전 판의 `data/stocknews_날짜.csv`, `news_judged.jsonl`, `news_feedback.jsonl` 은 처음 켤 때 DB 로 옮기고, 옛 파일은 지우지 않는다.
 처음부터 다시 는 표를 지우지 않고 `feedback_bak_날짜` 처럼 이름을 바꿔 DB 안에 남긴다.
 
+## MarketBeat 목표가 변경 속도 재기 (시험 중)
+
+증권사 목표가 변경을 뉴스보다 빨리 받을 수 있는지 재 보는 중이다. MarketBeat 약관은 MarketBeat 화면 말고 다른 방법으로
+접속하는 것을 금하므로, 서버에서 페이지를 받지 않고 **사용자가 Edge 에 띄워 둔 탭을 확장이 읽는다.**
+
+1. `edge://extensions` → 개발자 모드 → 압축 풀린 파일 로드 → `extension` 폴더.
+2. Edge 에 https://www.marketbeat.com/ratings/ 를 열어 둔다. 확장이 5분마다 새로 고치고, 표를 알리미(18766)로 넘긴다.
+   오른쪽 아래 초록 딱지에 넘긴 줄 수가 나온다.
+3. 새 줄이 처음 보인 시각이 `data/stocknews.db` 의 `mb_ratings` 에 쌓인다. `python mb_report.py` 로 본다.
+
+MarketBeat 페이지에는 줄마다 올라온 시각이 없고, 페이지 밑에 Benzinga 등에서 받은 자료라고 적혀 있다. 그래서 직접 재 본다.
+
 ## 목록만 보고 싶을 때
 
 LLM 없이 키워드 거름만 거친 목록이 필요하면 `stocknews.py` 를 쓴다. 표준 라이브러리만 쓴다.

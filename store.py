@@ -44,6 +44,12 @@ create index if not exists judged_at on judged(at);
 create table if not exists feedback (
     n integer primary key autoincrement, id text, title text, "like" int, strong int, at text);
 create table if not exists meta (k text primary key, v text);
+create table if not exists mb_ratings (       -- MarketBeat 목표가 변경 (확장이 사용자 탭에서 읽어 보낸 것)
+    id text primary key,                       -- MarketBeat 의 변경 번호 (details/<id>)
+    first_seen text, last_seen text,           -- 처음·마지막으로 표에서 본 시각 (UTC)
+    baseline int,                              -- 1 이면 측정을 시작할 때 이미 있던 줄 (속도 재기에서 뺀다)
+    ticker text, company text, action text, brokerage text, analyst text, price text,
+    pt_old text, pt_new text, rating_old text, rating_new text, page_refreshed text);
 """
 
 _local = threading.local()
@@ -170,6 +176,33 @@ def latest_feedback() -> dict:
         fb[r["id"]] = {"id": r["id"], "title": r["title"], "like": None if r["like"] is None else bool(r["like"]),
                        "strong": bool(r["strong"]), "at": r["at"]}
     return fb
+
+
+# ─────────────────────────────────────────────────────────────
+# MarketBeat 목표가 변경 (속도 재기)
+# ─────────────────────────────────────────────────────────────
+
+MB_COLS = ["ticker", "company", "action", "brokerage", "analyst", "price",
+           "pt_old", "pt_new", "rating_old", "rating_new"]
+
+
+def add_mb(rows: list, refreshed: str) -> int:
+    """표의 줄을 넣는다. 처음 본 줄은 first_seen 을 지금으로, 이미 있던 줄은 last_seen 만 바꾼다.
+    표를 처음 받을 때(아직 아무 줄도 없을 때) 들어온 줄은 baseline 으로 표시한다. 새 줄 수를 돌려준다."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    c = con()
+    baseline = int(c.execute("select count(*) from mb_ratings").fetchone()[0] == 0)
+    have = {r[0] for r in c.execute("select id from mb_ratings")}
+    new = [r for r in rows if str(r.get("id")) not in have]
+    with _write:
+        c.executemany(
+            f"insert into mb_ratings (id, first_seen, last_seen, baseline, {', '.join(MB_COLS)}, page_refreshed) "
+            f"values (?, ?, ?, ?, {', '.join('?' * len(MB_COLS))}, ?)",
+            [(str(r["id"]), now, now, baseline, *(str(r.get(k, ""))[:120] for k in MB_COLS), refreshed[:80])
+             for r in new])
+        c.executemany("update mb_ratings set last_seen=? where id=?", [(now, str(r["id"])) for r in rows])
+        c.commit()
+    return len(new)
 
 
 # ─────────────────────────────────────────────────────────────

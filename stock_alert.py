@@ -1007,8 +1007,17 @@ def watch_change(watcher: Watcher, body: dict) -> dict:
     return {"ok": True}
 
 
+def mb_rows(watcher: Watcher, body: dict) -> dict:
+    """Edge 확장이 사용자 탭의 MarketBeat 목표가 표를 보낸 것. 새 줄이 처음 보인 시각을 기록한다 (속도 재기)."""
+    rows = [r for r in body.get("rows") or [] if isinstance(r, dict) and str(r.get("id", "")).isdigit()][:1000]
+    n = store.add_mb(rows, str(body.get("refreshed") or ""))
+    if n:
+        log(f"MarketBeat 새 줄 {n}건 (표 {len(rows)}줄, 페이지 갱신 {body.get('refreshed', '')})")
+    return {"ok": True, "new": n}
+
+
 SETTING_ROUTES = {"/settings": set_setting, "/say": say_test, "/telegram-test": telegram_test,
-                  "/fetch": fetch_now, "/watch": watch_change}
+                  "/fetch": fetch_now, "/watch": watch_change, "/mb": mb_rows}
 
 
 def load_stocks() -> list:
