@@ -1546,6 +1546,9 @@ def grading_html(watcher: Watcher) -> str:
                if miss else "<p class=why>크게 어긋난 것은 없다.</p>"))
 
 
+NAME_MAX = 50   # 언론사 성적표의 이름 칸 글자 수 (합친 이름 포함)
+
+
 def sources_page(watcher: Watcher) -> str:
     """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서만 안 보인다."""
     muted = {stocknews.source_key(x) for x in watcher.cfg.get("hide_sources") or []}
@@ -1557,21 +1560,28 @@ def sources_page(watcher: Watcher) -> str:
         src = r["source"]
         name = src or "(언론사 없음)"
         off = stocknews.source_key(src) in muted
-        others = [x for x in r["names"] if x != src]
+        others = ", ".join(x for x in r["names"] if x != src)
+        # 이름 칸은 합친 이름까지 50자 안으로, 넘으면 "..." (전하 요청). 전체는 마우스를 올리면 보인다
+        full = name + (f" + {others}" if others else "")
+        if len(name) > NAME_MAX:
+            name, others = name[:NAME_MAX - 3] + "...", ""
+        elif others and len(full) > NAME_MAX:
+            others = others[:max(0, NAME_MAX - len(name) - 6)] + "..."
         rows.append(
-            f"<tr{' class=off' if off else ''}><td>{html.escape(name)}"
-            f"{' <small>+ ' + html.escape(', '.join(others)) + '</small>' if others else ''}</td>"
+            # 가리기 단추를 맨 왼쪽에 둔다 (전하 요청). 이 칸 머리글을 누르면 가린 것끼리 모인다
+            f"<tr{' class=off' if off else ''}><td data-v={1 if off else 0}>"
+            f"<button class=hs data-src=\"{html.escape(src, quote=True)}\" data-hide={'0' if off else '1'}>"
+            f"{'되살리기' if off else '가리기'}</button></td><td title=\"{html.escape(full, quote=True)}\">{html.escape(name)}"
+            f"{' <small>+ ' + html.escape(others) + '</small>' if others else ''}</td>"
             f"<td data-v={r['n']}>{r['n']}</td><td data-v={r['avg']:.2f}>{r['avg']:.1f}</td>"
             f"<td data-v={r['hi'] or 0}>{r['hi'] or ''}</td>"
-            f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td>"
-            f"<td><button class=hs data-src=\"{html.escape(src, quote=True)}\" data-hide={'0' if off else '1'}>"
-            f"{'되살리기' if off else '가리기'}</button></td></tr>")
+            f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td></tr>")
     return f"""<!doctype html><meta charset=utf-8><title>성적표 · 종목 뉴스 필터</title>
 <style>
 body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 a{{color:#8ab4f8}} h2{{margin:0 0 4px;font-size:1.3em}} .why{{color:#8a9099;font-size:.86em}}
 table{{border-collapse:collapse}} th,td{{padding:4px 10px;border-bottom:1px solid #2a2d33;text-align:right}}
-th:first-child,td:first-child{{text-align:left}} th{{cursor:pointer;color:#b8bec6;font-weight:600;white-space:nowrap}}
+th:nth-child(-n+2),td:nth-child(-n+2){{text-align:left}} th{{cursor:pointer;color:#b8bec6;font-weight:600;white-space:nowrap}}
 td small{{color:#8a9099}} tr.off td{{color:#6b7078}}
 button.hs{{font:inherit;font-size:.85em;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:6px;padding:2px 8px;cursor:pointer}}
 tr.off button.hs{{background:#3a4a6b}}
@@ -1585,16 +1595,16 @@ ul.miss li{{margin:2px 0}} ul.miss a{{color:#e6e6e6;text-decoration:none}} ul.mi
 <p class=why>{html.escape(first[:10])} 부터 판별한 {sum(r['n'] for r in stats)}건, 언론사 {len(stats)}곳 ·
 '알림' 은 {th}점 이상 · 👍·👎 는 🔔10·🔕0 포함, 뉴스마다 마지막 반응만 ·
 가린 언론사는 판별 목록에서만 안 보인다 (판별·알림은 그대로, '모두 보기' 로 볼 수 있다) · 머리글을 누르면 정렬</p>
-<table id=t><thead><tr><th>언론사</th><th>건수</th><th>평균 점수</th><th>알림</th><th>👍</th><th>👎</th><th>{len(muted)}곳 가림</th></tr></thead>
+<table id=t><thead><tr><th>{len(muted)}곳 가림</th><th>언론사</th><th>건수</th><th>평균 점수</th><th>알림</th><th>👍</th><th>👎</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 <script>
 document.querySelectorAll("#t th").forEach((th, i) => th.onclick = () => {{
   const body = document.querySelector("#t tbody"), rows = [...body.rows];
-  const key = (tr) => i === 0 ? tr.cells[0].textContent.toLowerCase() : Number(tr.cells[i].dataset.v || 0);
+  const key = (tr) => i === 1 ? tr.cells[1].textContent.toLowerCase() : Number(tr.cells[i].dataset.v || 0);
   const dir = th.dataset.dir === "down" ? 1 : -1;
   document.querySelectorAll("#t th").forEach((x) => delete x.dataset.dir);
   th.dataset.dir = dir === -1 ? "down" : "up";
-  rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * (i === 0 ? -dir : dir));
+  rows.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * (i === 1 ? -dir : dir));
   rows.forEach((tr) => body.appendChild(tr));
 }});
 document.querySelector("#t tbody").addEventListener("click", async (e) => {{
@@ -1607,6 +1617,7 @@ document.querySelector("#t tbody").addEventListener("click", async (e) => {{
   if (!d || !d.ok) {{ alert("바꾸지 못했습니다" + (d && d.msg ? ": " + d.msg : "")); return; }}
   b.closest("tr").classList.toggle("off", hide);
   b.dataset.hide = hide ? "0" : "1";
+  b.closest("td").dataset.v = hide ? "1" : "0";
   b.textContent = hide ? "되살리기" : "가리기";
 }});
 </script>"""
