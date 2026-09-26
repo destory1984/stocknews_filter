@@ -89,6 +89,9 @@ DEFAULTS = {
     "summarize": True,
     "summary_hours": 48,           # 이 시간 안에 판별한 뉴스만 요약한다
     "google_gap_sec": 30,          # 구글 링크 풀기 사이 간격. 자주 부르면 구글이 429 로 막는다
+    # 구글 뉴스 RSS 는 옛 기사에 새 날짜를 붙여 다시 올리기도 한다 (6월 기사가 9월 날짜로 옴).
+    # 알릴 만한 구글 기사는 알리기 전에 원문 날짜를 보고, 이보다 오래됐으면 알리지 않고 목록에서 숨긴다
+    "stale_days": 3,
 }
 
 PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
@@ -549,6 +552,40 @@ class Summarizer:
         self.busy_until = 0.0      # 구글이 429 로 막으면 이때까지 구글 기사는 쉰다
         self.last_google = 0.0
         self.done = 0
+        self.gate = threading.Lock()   # 구글 링크 풀기는 판별 루프와 요약 스레드가 함께 쓴다
+        self.cache = {}                # id → 본문. 알리기 전에 받은 본문을 요약에 다시 쓴다 (메모리에만)
+        self.dated = set()             # 원문 날짜를 본 id (Ollama 가 꺼져 있어도 옛 기사는 가린다)
+
+    def fetch_article(self, rec: dict, wait: bool = True):
+        """원문 (본문, 처음 나온 시각). 구글이 막는 중이면 article.Busy. 30초 간격을 지킨다."""
+        with self.gate:
+            if time.time() < self.busy_until:
+                raise article.Busy("구글이 잠시 막는 중")
+            gap = self.cfg["google_gap_sec"] - (time.time() - self.last_google)
+            if gap > 0:
+                if not wait:
+                    raise article.Busy("간격을 기다려야 함")
+                time.sleep(gap)
+            self.last_google = time.time()
+            try:
+                _, body, pub = article.fetch_body(rec["url"])
+            except article.Busy:
+                self.busy_until = time.time() + 1800
+                log("구글이 요청이 많다며 막음 → 30분 쉬고 다시")
+                raise
+        self.cache[rec["id"]] = (body, pub)
+        return body, pub
+
+    def is_stale(self, pub) -> bool:
+        return bool(pub) and pub < datetime.now(timezone.utc) - timedelta(days=self.cfg["stale_days"])
+
+    def mark_date(self, rec: dict, pub):
+        """원문 날짜를 기록하고, 오래된 기사면 stale 로 표시한다."""
+        if pub:
+            rec["published_real"] = pub.isoformat(timespec="seconds")
+            if self.is_stale(pub):
+                rec["stale"] = True
+                rec["alerted"] = False
 
     @property
     def cfg(self):
@@ -586,36 +623,62 @@ class Summarizer:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
+        """구글 기사는 Ollama 와 상관없이 원문 날짜부터 본다 (옛 기사 가리기). 요약은 Ollama 가 켜져 있을 때만."""
         try:
-            if not self.pending() or not self.ollama_alive():
+            todo = self.pending()
+            if not todo:
                 return
-            for rec in self.pending()[:20]:
-                if not self.cfg.get("summarize") or not self.one(rec):
+            alive = self.ollama_alive()
+            for rec in todo[:20]:
+                if not self.cfg.get("summarize"):
+                    break
+                if rec.get("feed") == "google" and rec["id"] not in self.dated:
+                    if not self.check_date(rec):   # 구글이 막는 중
+                        break
+                    if self.w.judged.get(rec["id"], rec).get("summary_state"):   # 옛 기사·본문 없음
+                        continue
+                if alive and not self.one(rec):
                     break
         except Exception as e:
             log(f"요약 오류: {type(e).__name__}: {str(e)[:120]}")
         finally:
             self.running = False
 
+    def check_date(self, rec: dict) -> bool:
+        """원문을 받아 날짜를 기록한다 (본문은 요약에 쓰려고 메모리에 둔다). 구글이 막으면 False."""
+        try:
+            body, pub = self.fetch_article(rec)
+        except article.Busy:
+            return False
+        except article.Skip as e:
+            self.save(rec, "", f"skip:{e}")
+            return True
+        except requests.RequestException as e:
+            self.save(rec, "", f"skip:{type(e).__name__}")
+            return True
+        self.dated.add(rec["id"])
+        live = self.w.judged.get(rec["id"], rec)
+        self.mark_date(live, pub)
+        if live.get("stale"):
+            self.cache.pop(rec["id"], None)
+            self.save(rec, "", "skip:옛 기사")
+            log(f"옛 기사라 목록에서 숨김 (원문 {pub:%Y-%m-%d}) {live.get('title_ko') or live['title']}"[:100])
+        elif len(body) < 80:
+            self.cache.pop(rec["id"], None)
+            self.save(rec, "", "skip:본문을 찾지 못함")
+        else:
+            store.save_judged({k: v for k, v in live.items() if k not in ("feed", "rss_summary")})
+        return True
+
     def one(self, rec: dict) -> bool:
         """한 건 요약. 계속해도 되면 True, 멈춰야 하면(Ollama 꺼짐·구글 429) False."""
         if rec.get("feed") == "google":
-            wait = self.cfg["google_gap_sec"] - (time.time() - self.last_google)
-            if wait > 0:
-                time.sleep(wait)
-            self.last_google = time.time()
-            try:
-                _, body = article.fetch_body(rec["url"])
-            except article.Busy:
-                self.busy_until = time.time() + 1800
-                log("요약: 구글이 요청이 많다며 막음 → 30분 쉬고 다시")
-                return False
-            except article.Skip as e:
-                self.save(rec, "", f"skip:{e}")
-                return True
-            except requests.RequestException as e:
-                self.save(rec, "", f"skip:{type(e).__name__}")
-                return True
+            if rec["id"] not in self.cache:   # 다시 켠 뒤라 본문이 메모리에 없다
+                if not self.check_date(rec):
+                    return False
+                if rec["id"] not in self.cache:   # 옛 기사·본문 없음으로 끝났다
+                    return True
+            body, _ = self.cache.pop(rec["id"])
         else:
             body = rec.get("rss_summary") or ""
             if not body:
@@ -743,6 +806,17 @@ class Watcher:
                 late = self.is_late(r)
                 alert = (score >= self.cfg["threshold"] and not late and not self.topic_alerted(topic)
                          and not self.is_dup(r["title"]))
+                pub = None
+                if alert and r.get("feed") == "google":
+                    # 알리기 전에 원문 날짜를 본다. 구글이 막는 중이거나 날짜를 못 찾으면 그대로 알린다
+                    try:
+                        _, pub = self.summarizer.fetch_article(r)
+                        self.summarizer.dated.add(r["id"])
+                    except (article.Busy, article.Skip, requests.RequestException):
+                        pass
+                    if self.summarizer.is_stale(pub):
+                        alert = False
+                        log(f"옛 기사라 알리지 않음 (원문 {pub:%Y-%m-%d}) {ko or r['title']}"[:90])
                 rec = {"id": r["id"], "title": r["title"], "url": r["url"], "source": r.get("source", ""),
                        "tickers": r.get("tickers", ""),
                        "created_at": r["created_at"], "score": score, "reason": reason, "topic": topic,
@@ -750,6 +824,7 @@ class Watcher:
                        "at": datetime.now(KST).isoformat(timespec="seconds")}
                 if summ:   # 야후 설명을 판별 때 줄인 것. 구글 기사는 요약 스레드가 나중에 채운다
                     rec.update(summary_ko=summ, summary_by="rss", summary_state="done")
+                self.summarizer.mark_date(rec, pub)
                 self.judged[r["id"]] = rec
                 store.save_judged(rec)
                 mark = "🔔" if alert else "⏰" if late and score >= self.cfg["threshold"] else "  "
@@ -959,7 +1034,7 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
     def hide(r):
         if r["id"] == done or fb.get(r["id"]) in ("1", "10"):
             return False
-        return fb.get(r["id"]) in ("0", "00") or r["score"] <= low
+        return fb.get(r["id"]) in ("0", "00") or r["score"] <= low or bool(r.get("stale"))
 
     hidden = 0 if show_all else sum(1 for r in recs if hide(r))
     if not show_all:
@@ -994,6 +1069,9 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False) -> str:
 def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "") -> str:
     t = parse_ts(r.get("created_at", ""))
     when = t.astimezone(KST).strftime("%m-%d %H:%M") if t else ""
+    real = parse_ts(r.get("published_real") or "")
+    if real and t and abs((real - t).total_seconds()) > 86400:   # 구글이 붙인 날짜와 원문 날짜가 하루 넘게 다르면
+        when += f"<div class=old title='구글 뉴스가 새 날짜를 붙여 다시 올린 기사'>원문 {real.astimezone(KST):%m-%d}</div>"
     state = fb.get(r["id"])   # "10" / "1" / "0" / "00" / None
     classes = ["hit"] if r.get("alerted") else []
     if r["id"] == done:
@@ -1032,19 +1110,19 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
     note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
-             f"👎·🔕0 준 뉴스{f'와 {low}점 이하 뉴스' if low >= 0 else ''} {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
+             f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사 {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
     stocks = load_stocks()
     names = " · ".join(html.escape(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
     menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
-    return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 필터</title>
+    return f"""<!doctype html><meta charset=utf-8><title>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러</title>
 <style>{settings.CSS}
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.sum{{color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} .sum{{color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
-<header><h2>종목 뉴스 필터 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
+<header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
   <span class=fsz><button class=hbtn id=fsdown title="글자 작게" aria-label="글자 작게">가-</button><button class=hbtn id=fsup title="글자 크게" aria-label="글자 크게">가+</button></span>
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>

@@ -7,6 +7,7 @@
 """
 import html
 import json
+from datetime import datetime, timezone
 import re
 import urllib.parse
 import urllib.robotparser
@@ -103,8 +104,31 @@ def extract(page: str) -> str:
     return body[:4000]
 
 
+def published(page: str):
+    """기사 페이지에 적힌 처음 나온 시각 (datetime, UTC). 못 찾으면 None.
+    구글 뉴스 RSS 는 옛 기사에 새 날짜를 붙여 다시 올리기도 해서, 원문에 적힌 날짜를 믿는다."""
+    pats = (r'"datePublished"\s*:\s*"([^"]+)"',
+            r'(?:property|name|itemprop)="(?:article:published_time|datePublished|pubdate|publishdate)"[^>]*content="([^"]+)"',
+            r'content="([^"]+)"[^>]*(?:property|name|itemprop)="(?:article:published_time|datePublished)"')
+    for pat in pats:
+        m = re.search(pat, page)
+        if not m:
+            continue
+        v = m.group(1).strip().replace("Z", "+00:00")
+        v = re.sub(r"([+-]\d\d)(\d\d)$", lambda m: m.group(1) + ":" + m.group(2), v)   # +0900 → +09:00
+        try:
+            dt = datetime.fromisoformat(v)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:   # 시간대가 없으면 한국 사이트가 대부분이라 KST 로 본다
+            from datetime import timedelta
+            dt = dt.replace(tzinfo=timezone(timedelta(hours=9)))
+        return dt.astimezone(timezone.utc)
+    return None
+
+
 def fetch_body(url: str) -> tuple:
-    """(원문 주소, 본문). 막히거나 비었으면 Skip."""
+    """(원문 주소, 본문, 처음 나온 시각 또는 None). 막히거나 비었으면 Skip."""
     real = decode_google(url)
     if not allowed(real):
         raise Skip("robots.txt 가 막음")
@@ -113,6 +137,4 @@ def fetch_body(url: str) -> tuple:
         raise Skip(f"HTTP {r.status_code}")
     r.encoding = r.encoding if r.encoding and r.encoding.lower() != "iso-8859-1" else r.apparent_encoding
     body = extract(r.text)
-    if len(body) < 80:
-        raise Skip("본문을 찾지 못함")
-    return real, body
+    return real, body, published(r.text)

@@ -21,8 +21,9 @@ DB = BASE / "data" / "stocknews.db"
 
 NEWS_COLS = ["id", "created_at", "found_at", "tickers", "feed", "source", "title", "url", "rss_summary"]
 JUDGED_COLS = ["id", "title", "url", "source", "tickers", "created_at", "score", "reason", "topic", "say",
-               "title_ko", "summary_ko", "summary_by", "summary_state", "alerted", "late", "by", "at"]
-BOOL_COLS = {"alerted", "late"}
+               "title_ko", "summary_ko", "summary_by", "summary_state", "alerted", "late", "by", "at",
+               "published_real", "stale"]
+BOOL_COLS = {"alerted", "late", "stale"}
 
 SCHEMA = """
 create table if not exists news (
@@ -36,7 +37,9 @@ create table if not exists judged (
     summary_ko text,          -- 한국어 요약
     summary_by text,          -- 요약한 쪽: rss(야후 설명을 판별 때 줄임) / ollama
     summary_state text,       -- null 요약 전, done, skip:<까닭>
-    alerted int, late int, by text, at text);
+    alerted int, late int, by text, at text,
+    published_real text,      -- 원문 페이지에 적힌 처음 나온 시각 (구글 기사만, 확인한 것만)
+    stale int);               -- 원문 날짜가 오래된 옛 기사 (구글이 새 날짜를 붙여 다시 올린 것)
 create index if not exists judged_at on judged(at);
 create table if not exists feedback (
     n integer primary key autoincrement, id text, title text, "like" int, strong int, at text);
@@ -55,6 +58,12 @@ def con() -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         c.execute("pragma journal_mode=wal")
         c.executescript(SCHEMA)
+        # 먼저 만든 DB 에는 없는 칸을 더한다
+        have = {r[1] for r in c.execute("pragma table_info(judged)")}
+        for col, typ in (("published_real", "text"), ("stale", "int")):
+            if col not in have:
+                c.execute(f"alter table judged add column {col} {typ}")
+        c.commit()
         _local.con = c
     return c
 
@@ -114,7 +123,7 @@ def _judged_dict(r: sqlite3.Row) -> dict:
     for k in BOOL_COLS:
         d[k] = bool(d.get(k))
     # 옛 jsonl 에는 title_ko 칸 자체가 없었다. 번역을 다시 할지 가르려고 null 은 칸을 뺀다
-    for k in ("title_ko", "summary_ko", "summary_by", "summary_state"):
+    for k in ("title_ko", "summary_ko", "summary_by", "summary_state", "published_real"):
         if d.get(k) is None:
             d.pop(k, None)
     return d
