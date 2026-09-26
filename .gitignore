@@ -1,6 +1,11 @@
+# 개인 설정과 수집·판별 기록은 올리지 않는다
 watchlist.json
 seen.json
 news/
+data/
+news_judged.jsonl
+news_feedback.jsonl
+*.bak.jsonl
 *.csv
 *.log
 .env

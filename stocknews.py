@@ -142,7 +142,7 @@ def stock_from_arg(arg):
 
 def load_watchlist():
     if not WATCHLIST.exists():
-        sys.exit(f"{WATCHLIST.name} not found. Copy watchlist.example.json to "
+        raise SystemExit(f"{WATCHLIST.name} not found. Copy watchlist.example.json to "
                  f"{WATCHLIST.name} or pass stock names on the command line.")
     with open(WATCHLIST, encoding="utf-8") as f:
         return json.load(f)
@@ -167,7 +167,8 @@ def norm_title(title):
     return re.sub(r"[\W_]+", "", title.lower())
 
 
-def collect(stocks, days, sources):
+def collect(stocks, days, sources, on_error=None):
+    on_error = on_error or (lambda msg: print(msg, file=sys.stderr))
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = []
     for stock in stocks:
@@ -178,7 +179,7 @@ def collect(stocks, days, sources):
                 items = list(SOURCES[name](stock, days))
             except (urllib.error.URLError, ET.ParseError, TimeoutError) as e:
                 # Print only the error type/reason, never the full request.
-                print(f"  [{stock['name']}] {name} failed: {type(e).__name__}", file=sys.stderr)
+                on_error(f"[{stock['name']}] {name} failed: {type(e).__name__}")
                 continue
             for it in items:
                 key = norm_title(it["title"])
