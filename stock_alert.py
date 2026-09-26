@@ -94,7 +94,7 @@ DEFAULTS = {
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
     "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
-    "tts_voice_en": "en-US-JennyNeural",  # 영어 언론사 이름("The Motley Fool, …")을 읽는 음성 (여). 비우면 한국어 음성이 다 읽는다
+    "tts_voice_en": "",            # 영어 언론사 이름("The Motley Fool, …")을 읽을 영어 음성 (예: en-US-JennyNeural). 비우면 한국어 음성이 다 읽는다
     "tts_rate": "+0%",
     "tts_chime": r"C:\Windows\Media\Windows Notify Email.wav",   # saveticker(Messaging)·RSI 와 다른 소리
     "quiet_on": False,             # 조용한 시각을 쓸지
