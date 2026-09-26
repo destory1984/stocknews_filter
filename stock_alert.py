@@ -79,6 +79,8 @@ DEFAULTS = {
     "examples": 15,                # 프롬프트에 넣을 👍, 👎 각각의 최대 개수
     "dup_ratio": 0.6,              # 최근 알린 제목과 이만큼 비슷하면 알리지 않는다
     # 급등락: 15분 사이 이만큼(%) 움직이면 알린다. 3배 ETF 는 따로. 같은 종목은 move_cooldown_min 에 한 번
+    "earnings_alert": True,        # 회사가 확정한 실적 발표를 earnings_lead_hours 전에 한 번 알린다 (추정 날짜는 안 알림)
+    "earnings_lead_hours": 8,      # 새벽 05:00 발표면 전날 21:00, 저녁 21:00 발표면 그날 13:00
     "weekly_notice": "Sun 09:00",   # 이 요일·시각(한국)에 주간 리포트가 나왔다고 한 번 알린다. 비우면 안 알림
     "move_alerts": True,
     "move_pct": 3.0,
@@ -932,7 +934,50 @@ class Watcher:
                         for t, v in sorted(got.items(), key=lambda x: x[1]["at"])))
             except Exception as e:
                 log(f"실적일 받기 실패: {type(e).__name__}: {str(e)[:100]}")
+            try:
+                self.earnings_notice()
+            except Exception as e:
+                log(f"실적 발표 알림 실패: {type(e).__name__}: {str(e)[:100]}")
         threading.Thread(target=job, daemon=True).start()
+
+    def earnings_notice(self):
+        """확정된 실적 발표가 earnings_lead_hours 안으로 들어오면 한 번 알린다. 알린 것은 DB 에 적는다."""
+        if not self.cfg.get("earnings_alert"):
+            return
+        now = datetime.now(KST)
+        lead = timedelta(hours=float(self.cfg.get("earnings_lead_hours") or 8))
+        try:
+            sent = json.loads(store.get_meta("earnings_notified", "{}") or "{}")
+        except ValueError:
+            sent = {}
+        names = {s.get("yahoo"): s["name"] for s in load_stocks()}
+        for t, at, _, item in earnings.upcoming(3):
+            if item.get("confirmed") is not True or sent.get(t) == item["at"]:
+                continue
+            if not (at - lead <= now < at):
+                continue
+            sent[t] = item["at"]
+            store.set_meta("earnings_notified", json.dumps(sent))
+            name = names.get(t, t)
+            when = spoken_when(at, now) + ("께" if item.get("approx") else "")
+            session = {"장 뒤": "장 마감 뒤", "장 전": "장 열기 전"}.get(item.get("session", ""), "")
+            head = f"{name} ({t}) 실적 발표 {at:%m-%d}({'월화수목금토일'[at.weekday()]}) {at:%H:%M}{'께' if item.get('approx') else ''}"
+            log(f"📅 {head} {item.get('session', '')}")
+            if self.cfg.get("toast", True):
+                try:
+                    from winotify import Notification, audio
+                    n = Notification(app_id="종목 뉴스 필터", title="실적 발표 알림", msg=f"{head} {item.get('session', '')}",
+                                     launch=f"http://127.0.0.1:{self.cfg['port']}/")
+                    n.set_audio(audio.Silent if self.cfg["tts"] and not quiet_now(self.cfg) else audio.Default, loop=False)
+                    n.show()
+                except Exception as e:
+                    log(f"실적 발표 토스트 실패: {type(e).__name__}")
+            if self.cfg.get("telegram"):
+                err = tg_send(f"<b>실적 발표</b> · {html.escape(head)} {html.escape(item.get('session', ''))}",
+                              silent=quiet_now(self.cfg))
+                if err:
+                    log(f"실적 발표 텔레그램 실패: {err}")
+            say_alert(self.cfg, f"{name}, 실적 발표. {when}" + (f", {session}." if session else "."))
 
     def check_moves(self):
         """5분마다 뒤에서 15분 변동을 본다. 기준을 넘으면 화면·토스트·음성(·텔레그램)."""
@@ -1607,6 +1652,15 @@ h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px
 👍 {r['up']} · 👎 {r['down']} · 등락은 야후 일봉 종가 (7일 전 → 마지막)</p>
 <p class=why>많이 나온 사건 ({watcher.cfg['threshold']}점 이상): {topics}</p>
 {''.join(cards)}"""
+
+
+def spoken_when(at: datetime, now: datetime) -> str:
+    """읽기 좋은 때: '내일 새벽 5시', '오늘 밤 9시 30분'."""
+    day = {0: "오늘", 1: "내일", 2: "모레"}.get((at.date() - now.date()).days, f"{at.month}월 {at.day}일")
+    h = at.hour
+    part = "새벽" if h < 6 else "아침" if h < 12 else "오후" if h < 18 else "밤"
+    h12 = h if h <= 12 else h - 12
+    return f"{day} {part} {h12}시" + (f" {at.minute}분" if at.minute else "")
 
 
 def moves_html(watcher: Watcher) -> str:
