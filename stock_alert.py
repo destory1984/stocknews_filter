@@ -1374,7 +1374,8 @@ def hide_source(watcher: Watcher, body: dict) -> dict:
     src = str(body.get("source") or "").strip()
     if not src:
         return {"ok": False, "msg": "언론사 이름이 없다"}
-    muted = [x for x in watcher.cfg.get("hide_sources") or [] if x != src]
+    key = stocknews.source_key(src)
+    muted = [x for x in watcher.cfg.get("hide_sources") or [] if stocknews.source_key(x) != key]
     if body.get("hide"):
         muted.append(src)
     watcher.cfg["hide_sources"] = sorted(muted)
@@ -1436,6 +1437,31 @@ def reset_records(watcher: Watcher, what: str) -> list:
 SOURCE_NAMES = {"finance.yahoo.com": "Yahoo Finance", "v.daum.net": "다음"}
 
 
+def group_sources(stats: list) -> list:
+    """source_stats() 의 줄을 같은 언론사끼리 합친다 (MarketBeat 와 marketbeat.com, Yahoo Finance UK 등).
+    이름은 건수가 가장 많은 것, 단 소문자 도메인(marketbeat.com)·지역판(Investing.com India)은 뒤로 미룬다."""
+    groups = {}
+    for r in stats:
+        groups.setdefault(stocknews.source_key(r["source"] or ""), []).append(r)
+    out = []
+    for rs in groups.values():
+        def rank(r):
+            raw = r["source"] or ""
+            shown = SOURCE_NAMES.get(raw, raw)
+            domain = shown == raw.lower() and "." in raw and " " not in raw
+            return (domain, bool(stocknews.SOURCE_REGION.search(shown)), -r["n"])
+        rs.sort(key=rank)
+        best = rs[0]["source"] or ""
+        n = sum(r["n"] for r in rs)
+        out.append({"source": SOURCE_NAMES.get(best, best),
+                    "names": [r["source"] for r in rs if r["source"]],
+                    "n": n, "avg": sum(r["avg"] * r["n"] for r in rs) / n,
+                    "hi": sum(r["hi"] or 0 for r in rs), "up": sum(r["up"] or 0 for r in rs),
+                    "down": sum(r["down"] or 0 for r in rs),
+                    "first": min((r["first"] for r in rs if r["first"]), default="")})
+    return out
+
+
 FB_LABELS = {"10": "🔔10점", "1": "👍", "0": "👎", "00": "🔕0점"}
 
 
@@ -1470,18 +1496,19 @@ def grading_html(watcher: Watcher) -> str:
 
 def sources_page(watcher: Watcher) -> str:
     """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서만 안 보인다."""
-    muted = set(watcher.cfg.get("hide_sources") or [])
-    stats = sorted(store.source_stats(), key=lambda r: -r["n"])
+    muted = {stocknews.source_key(x) for x in watcher.cfg.get("hide_sources") or []}
+    stats = sorted(group_sources(store.source_stats()), key=lambda r: -r["n"])
     th = watcher.cfg["threshold"]
     first = min((r["first"] for r in stats if r["first"]), default="")
     rows = []
     for r in stats:
-        src = r["source"] or ""
-        name = SOURCE_NAMES.get(src, src) or "(언론사 없음)"
-        off = src in muted
+        src = r["source"]
+        name = src or "(언론사 없음)"
+        off = stocknews.source_key(src) in muted
+        others = [x for x in r["names"] if x != src]
         rows.append(
             f"<tr{' class=off' if off else ''}><td>{html.escape(name)}"
-            f"{' <small>' + html.escape(src) + '</small>' if name != src and src else ''}</td>"
+            f"{' <small>+ ' + html.escape(', '.join(others)) + '</small>' if others else ''}</td>"
             f"<td data-v={r['n']}>{r['n']}</td><td data-v={r['avg']:.2f}>{r['avg']:.1f}</td>"
             f"<td data-v={r['hi'] or 0}>{r['hi'] or ''}</td>"
             f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td>"
@@ -1543,13 +1570,13 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
     # 방금 누른 것은 기록됐다는 표시를 위해, 👍·10점 준 것은 점수와 상관없이 남긴다.
     low = watcher.cfg["hide_max_score"]
 
-    muted = set(watcher.cfg.get("hide_sources") or [])
+    muted = {stocknews.source_key(x) for x in watcher.cfg.get("hide_sources") or []}
 
     def hide(r):
         if r["id"] == done or fb.get(r["id"]) in ("1", "10"):
             return False
         return (fb.get(r["id"]) in ("0", "00") or r["score"] <= low or bool(r.get("stale"))
-                or r.get("source", "") in muted)
+                or stocknews.source_key(r.get("source", "")) in muted)
 
     hidden = 0 if show_all else sum(1 for r in recs if hide(r))
     if not show_all:

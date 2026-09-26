@@ -132,10 +132,29 @@ def junk_reason(title: str) -> str:
     return ""
 
 
+# Google gives the same outlet under several names: "MarketBeat" and "marketbeat.com",
+# "Yahoo Finance UK", "Yahoo! Finance Canada", "Investing.com India". source_key() folds them.
+SOURCE_ALIAS = {"finance.yahoo.com": "yahoofinance", "v.daum.net": "다음"}
+SOURCE_REGION = re.compile(
+    r"\s+(uk|canada|australia|india|singapore|new zealand|nz|hong kong|philippines|malaysia|"
+    r"south africa|한국어|日本語|español|deutsch|france|italia|brasil)$", re.I)
+
+
+def source_key(src):
+    """Key for grouping one outlet's name variants. Empty string for an empty source."""
+    s = (src or "").strip().lower()
+    if s in SOURCE_ALIAS:
+        return SOURCE_ALIAS[s]
+    s = SOURCE_REGION.sub("", s.removeprefix("www."))
+    if " " not in s and re.fullmatch(r"[\w.-]+\.[a-z]{2,6}", s):
+        s = s.rsplit(".", 1)[0]          # marketbeat.com -> marketbeat
+    return re.sub(r"[^\w]", "", s)       # "24/7 Wall St." -> 247wallst
+
+
 def keep(item, stock, since):
     if item["published"] and item["published"] < since:
         return False
-    if item["source"].lower() in (x.lower() for x in stock.get("exclude_sources", [])):
+    if source_key(item["source"]) in {source_key(x) for x in stock.get("exclude_sources", [])}:
         return False
     text = (item["title"] + " " + item["summary"]).lower()
     if any(contains(text, w) for w in stock.get("exclude", [])):
