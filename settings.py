@@ -132,7 +132,10 @@ def stocks_html(stocks: list) -> str:
             f"<div class=stock data-name=\"{e(s['name'])}\">"
             f"<div class=srow><button type=button class=sdel title='종목에서 빼기' aria-label=삭제>{TRASH}</button>"
             f"<button type=button class=sname aria-expanded=false title='눌러서 자세히 고치기'>"
-            f"{e(s['name'])}{' <small>' + e(s['yahoo']) + '</small>' if s.get('yahoo') else ''}</button></div>"
+            # 티커 먼저, 회사 이름은 뒤에 작게. 이름이 티커와 같으면(SOXL) 한 번만
+            + (f"{e(s['yahoo'])}{' <small>' + e(s['name']) + '</small>' if s['name'].upper() != s['yahoo'].upper() else ''}"
+               if s.get("yahoo") else e(s["name"]))
+            + "</button></div>"
             f"<div class=sedit hidden>"
             f"<label>이름 <input name=name value=\"{e(s['name'])}\"></label>"
             f"<label>구글 검색어 <input name=google value=\"{e(s.get('google', ''))}\" placeholder=\"{e(s['name'])}\"></label>"
