@@ -1852,9 +1852,10 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
     note += (f"<a href='/?{sq[1:]}' style='text-decoration:underline'>숨기기</a></p>" if show_all else
              f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사"
              f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다. <a href='/?all=1{sq}' style='text-decoration:underline'>모두 보기</a></p>")
-    if stock:
-        note = (f"<p class=filt><b>{html.escape(stock)}</b> 뉴스만 보는 중 · "
-                f"<a href='/{'?all=1' if show_all else ''}'>모든 종목 보기</a></p>") + note
+    # 종목별 보기 띠는 종목 줄 바로 밑에 둔다 (실적·급등락·최근 알림 칸 아래에 두면 내려가야 보인다)
+    home = "/" + ("?all=1" if show_all else "")
+    filt = (f"<p class=filt><b>{html.escape(stock)}</b> 뉴스만 보는 중 "
+            f"<a class=unfilt href='{home}'>✕ 모든 종목 보기</a></p>") if stock else ""
     stocks = load_stocks()
     counts, th = counts or {}, watcher.cfg["threshold"]
 
@@ -1863,15 +1864,19 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
         return (f" <small class=cnt title='최근 24시간 목록에 보이는 뉴스 {n}건, 최고 {top}점'>{n}"
                 f"<b{' class=hi' if top >= th else ''}>·{top}</b></small>") if n else ""
 
-    names = " · ".join(f"<a class='sname{' on' if x['name'] == stock else ''}' href='/?s={quote(x['name'])}'>"
-                       f"{html.escape(x['name'])}{count(x['name'])}</a>" for x in stocks) or "없음 (⚙ 설정에서 추가)"
+    def link(name):   # 고른 종목을 다시 누르면 모든 종목으로 돌아간다
+        if name == stock:
+            return f"<a class='sname on' href='{home}' title='다시 누르면 모든 종목'>{html.escape(name)} ✕{count(name)}</a>"
+        return f"<a class=sname href='/?s={quote(name)}'>{html.escape(name)}{count(name)}</a>"
+
+    names = " · ".join(link(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
     menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
     return f"""<!doctype html><meta charset=utf-8><title>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러</title>
 <style>{settings.CSS}
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} .filt a{{color:#e6e6e6;text-decoration:underline}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
 #recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}}
@@ -1884,6 +1889,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 </header>
 {menu}
 <p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+{filt}
 {earnings_line()}
 {moves_html(watcher, stock)}
 {recent_alerts_html(watcher)}
