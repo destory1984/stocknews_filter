@@ -80,6 +80,7 @@ DEFAULTS = {
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
     "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
+    "tts_voice_en": "en-US-JennyNeural",  # 영어 언론사 이름("The Motley Fool, …")을 읽는 음성 (여). 비우면 한국어 음성이 다 읽는다
     "tts_rate": "+0%",
     "tts_chime": r"C:\Windows\Media\Windows Notify Email.wav",   # saveticker(Messaging)·RSI 와 다른 소리
     "quiet_on": False,             # 조용한 시각을 쓸지
@@ -404,20 +405,42 @@ def play_file(path: str):
         _mci("close newsalert")
 
 
+# "언론사, 제목" 에서 언론사가 영어면 그 부분만 영어 음성으로 읽는다. 한국어 음성은 영어 이름을 어색하게 읽는다
+_LATIN_SOURCE = re.compile(r"(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9 .&'!:+\-]*")
+
+
+def voice_parts(cfg: dict, text: str) -> list:
+    """[(글, 음성)]. 영어 언론사 이름이 앞에 있으면 둘로 나눈다."""
+    ko, en = cfg["tts_voice"], cfg.get("tts_voice_en")
+    head, sep, rest = text.partition(", ")
+    if en and sep and rest and _LATIN_SOURCE.fullmatch(head.strip()):
+        return [(head.strip(), en), (rest, ko)]
+    return [(text, ko)]
+
+
 def _speak_edge(cfg: dict, text: str):
     import asyncio
     import edge_tts
-    fd, tmp = tempfile.mkstemp(prefix="news_tts_", suffix=".mp3")
-    os.close(fd)
+    parts = voice_parts(cfg, text)
+    files = []
+    for _ in parts:
+        fd, tmp = tempfile.mkstemp(prefix="news_tts_", suffix=".mp3")
+        os.close(fd)
+        files.append(tmp)
+
+    async def make():   # 조각을 한꺼번에 받아 두고 이어서 튼다 (사이가 벌어지지 않게)
+        await asyncio.gather(*(edge_tts.Communicate(t, v, rate=cfg["tts_rate"]).save(f)
+                               for (t, v), f in zip(parts, files)))
     try:
-        asyncio.run(asyncio.wait_for(
-            edge_tts.Communicate(text, cfg["tts_voice"], rate=cfg["tts_rate"]).save(tmp), 15))
-        play_file(tmp)
+        asyncio.run(asyncio.wait_for(make(), 15))
+        for f in files:
+            play_file(f)
     finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        for f in files:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
 
 def _speak_sapi(text: str):
@@ -1098,7 +1121,7 @@ def make_handler(watcher: Watcher):
 # ─────────────────────────────────────────────────────────────
 
 SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "max_age_min": "알림 시한", "tts": "음성",
-                  "tts_voice": "목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
+                  "tts_voice": "목소리", "tts_voice_en": "영어 언론사 목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
                   "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
                   "catchup_hours": "밀린 뉴스", "backend": "판별 LLM", "claude_model": "Claude 모델",
                   "model": "Ollama 모델", "hide_max_score": "숨기기",

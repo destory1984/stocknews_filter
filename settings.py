@@ -11,6 +11,7 @@ from pathlib import Path
 
 VOICES = [("ko-KR-SunHiNeural", "선희 (여)"), ("ko-KR-InJoonNeural", "인준 (남)"),
           ("ko-KR-HyunsuMultilingualNeural", "현수 (남, 다국어)")]
+VOICES_EN = [("en-US-JennyNeural", "Jenny (여)"), ("en-US-AriaNeural", "Aria (여)"), ("", "쓰지 않음 (한국어 음성이 읽음)")]
 RATES = [("-30%", "느리게"), ("-15%", "조금 느리게"), ("+0%", "보통"), ("+15%", "조금 빠르게"), ("+30%", "빠르게")]
 MEDIA = Path(r"C:\Windows\Media")
 
@@ -27,6 +28,7 @@ FIELDS = {
     "max_age_min": ("select", [(str(m), f"{m}분") for m in (30, 60, 120, 180, 360)]),
     "tts": ("bool", None),
     "tts_voice": ("select", VOICES),
+    "tts_voice_en": ("select", VOICES_EN),
     "tts_rate": ("select", RATES),
     "tts_chime": ("select", None),
     "quiet_on": ("bool", None),
@@ -181,6 +183,7 @@ def menu(cfg: dict, stocks: list) -> str:
   {row(_label("음성으로 읽기", "말머리 소리 뒤에 언론사와 제목을 읽는다", "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다."), _switch(cfg, "tts", "음성으로 읽기"),
        "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다.")}
   {row(_label("목소리"), _select(cfg, "tts_voice", "목소리"))}
+  {row(_label("영어 언론사 목소리", "The Motley Fool 같은 영어 이름만"), _select(cfg, "tts_voice_en", "영어 언론사 목소리"))}
   {row(_label("빠르기"), _select(cfg, "tts_rate", "빠르기"))}
   {row(_label("말머리 소리", "saveticker 는 Windows Notify Messaging"), _select(cfg, "tts_chime", "말머리 소리"))}
   {row(_label("조용한 시각", "이 PC 시각. 23:00~07:00 처럼 자정을 넘어도 된다"), _switch(cfg, "quiet_on", "조용한 시각"))}
@@ -325,7 +328,7 @@ function quietInputs() {
 }
 function ttsInputs() {
   const on = $('#setmenu .switch[data-key="tts"]').getAttribute("aria-checked") === "true";
-  ["tts_voice", "tts_rate", "tts_chime"].forEach(k => $(`#setmenu [data-key="${k}"]`).disabled = !on);
+  ["tts_voice", "tts_voice_en", "tts_rate", "tts_chime"].forEach(k => $(`#setmenu [data-key="${k}"]`).disabled = !on);
 }
 $("#qfrom").onchange = $("#qto").onchange = () => setKey("tts_quiet", $("#qfrom").value + "-" + $("#qto").value);
 quietInputs(); ttsInputs();
