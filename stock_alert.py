@@ -1402,11 +1402,16 @@ def earnings_line() -> str:
         return ""
     parts = []
     for t, at, left, item in items:
-        tip = ("야후 시각 (정각이면 대개 어림값)" + (" · 나스닥 달력에서도 확인" if item.get("checked") else ""))
+        sure = item.get("confirmed")
+        tip = {True: "회사가 공지한 날짜 (나스닥)",
+               False: f"추정: 회사가 아직 공지하지 않아 지난 발표일로 어림잡은 날짜. 나스닥 추정은 {item.get('nasdaq_day', '')[5:]} (미국)",
+               None: "나스닥에 날짜가 없다 (한국 종목이거나 아직 안 올라옴) — 야후 날짜"}[sure]
+        cls = " ".join(c for c in ("warn" if left <= 3 else "", "guess" if sure is False else "") if c)
         parts.append(
-            f"<span{' class=warn' if left <= 3 else ''} title='{tip}'>{html.escape(t)} "
+            f"<span{f' class={chr(39)}{cls}{chr(39)}' if cls else ''} title='{tip}'>{html.escape(t)} "
             f"{at:%m-%d}({'월화수목금토일'[at.weekday()]}) {at:%H:%M}{'께' if item.get('approx') else ''}"
-            f"{' ' + item['session'] if item.get('session') else ''} {'오늘' if left == 0 else f'D-{left}'}</span>")
+            f"{' ' + item['session'] if item.get('session') else ''}"
+            f"{' 확정' if sure else ' 추정' if sure is False else ''} {'오늘' if left == 0 else f'D-{left}'}</span>")
     return "<p class=why id=earn>실적 발표 (한국 시각): " + " · ".join(parts) + "</p>"
 
 
@@ -1424,7 +1429,7 @@ body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margi
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.old{{color:#e0a44a;font-size:.8em}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
