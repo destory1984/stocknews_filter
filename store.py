@@ -8,6 +8,7 @@ koreainvest 의 bars.db 와 같은 방식: WAL 로 열어 읽는 동안에도 �
   judged    판별 결과 (점수·이유·사건·번역 제목·요약·알림 여부)
   feedback  🔔10·👍·👎·🔕0 반응. 누를 때마다 한 줄씩 쌓고, 같은 뉴스는 마지막 줄이 이긴다
   meta      옛 CSV·jsonl 을 옮겼는지 등
+  moves     급등락 알림 (15분 변동, 그때 원인 후보로 붙인 뉴스)
 """
 import csv
 import json
@@ -44,6 +45,9 @@ create index if not exists judged_at on judged(at);
 create table if not exists feedback (
     n integer primary key autoincrement, id text, title text, "like" int, strong int, at text);
 create table if not exists meta (k text primary key, v text);
+create table if not exists moves (
+    n integer primary key autoincrement, at text, ticker text, name text,
+    change real, price real, news text);     -- news: 원인 후보 [{title, url, score}] JSON
 create table if not exists mb_ratings (       -- MarketBeat 목표가 변경 (확장이 사용자 탭에서 읽어 보낸 것)
     id text primary key,                       -- MarketBeat 의 변경 번호 (details/<id>)
     first_seen text, last_seen text,           -- 처음·마지막으로 표에서 본 시각 (UTC)
@@ -240,6 +244,26 @@ def add_mb(rows: list, refreshed: str) -> int:
 # ─────────────────────────────────────────────────────────────
 # 처음부터 다시: 표를 지우지 않고 이름을 바꿔 남긴다 (되살리려면 이름을 원래대로)
 # ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# moves
+# ─────────────────────────────────────────────────────────────
+
+def add_move(item: dict):
+    _commit("insert into moves (at, ticker, name, change, price, news) values (?,?,?,?,?,?)",
+            (item["at"], item["ticker"], item["name"], item["change"], item["price"],
+             json.dumps(item["news"], ensure_ascii=False)))
+
+
+def read_moves(name: str = "", limit: int = 10) -> list:
+    """급등락 기록, 새것부터. name 을 주면 그 종목만."""
+    sql = "select at, ticker, name, change, price, news from moves"
+    args = ()
+    if name:
+        sql, args = sql + " where name = ?", (name,)
+    rows = con().execute(sql + " order by at desc limit ?", args + (limit,)).fetchall()
+    return [dict(r, news=json.loads(r["news"] or "[]")) for r in rows]
+
 
 def reset(what: str) -> list:
     stamp = datetime.now(timezone(timedelta(hours=9))).strftime("%Y%m%d_%H%M%S")
