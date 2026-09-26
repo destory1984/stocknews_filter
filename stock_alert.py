@@ -71,6 +71,9 @@ DEFAULTS = {
     # 이보다 오래된 뉴스는 알리지 않는다 (판별은 한다).
     # 구글 뉴스는 기사가 나온 뒤 늦게 잡히기도 해서 saveticker(60분)보다 길게 둔다.
     "max_age_min": 120,
+    # 같은 사건은 이 시간 안에 한 번만 알린다. 같은 종목이고 사건 이름의 낱말(회사 이름 뒤)이 겹치면 같은 사건으로 본다.
+    # 1시간·같은 이름일 때 09-26 하루 35번 (마이크론 실적 예고만 10번 가까이) → 12시간·낱말 겹침으로 되돌려 보니 21번
+    "topic_hours": 12,
     "catchup_hours": 12,           # 절전·재시작으로 밀린 뉴스는 이만큼까지 거슬러 판별해 목록에만 올린다
     "batch": 10,                   # 한 번에 묻는 뉴스 수
     "poll_sec": 10,
@@ -224,6 +227,22 @@ def read_news(days: int = 2) -> list:
 # ─────────────────────────────────────────────────────────────
 # 판별
 # ─────────────────────────────────────────────────────────────
+
+def same_event(topic_a: str, tickers_a: str, topic_b: str, tickers_b: str) -> bool:
+    """판별 모델이 붙인 사건 이름 둘이 같은 사건인가. 모델은 같은 일에 "마이크론 실적 발표",
+    "마이크론 4분기 실적", "마이크론 실적 전망" 처럼 이름을 조금씩 달리 붙인다.
+    종목이 하나라도 같고, 이름이 같거나 첫 낱말(보통 회사 이름) 뒤 낱말이 하나라도 겹치면 같은 사건으로 본다."""
+    if not topic_a or not topic_b:
+        return False
+    ta = {x.strip() for x in tickers_a.split(",") if x.strip()}
+    tb = {x.strip() for x in tickers_b.split(",") if x.strip()}
+    if ta and tb and not ta & tb:
+        return False
+    if topic_a == topic_b:
+        return True
+    words = lambda t: set(t.split()[1:]) or set(t.split())
+    return bool(words(topic_a) & words(topic_b))
+
 
 def news_line(r: dict) -> str:
     t = r["title"]
@@ -877,9 +896,10 @@ class Watcher:
                 seen.append(t)
         return seen[:40]
 
-    def topic_alerted(self, topic: str) -> bool:
-        """한 시간 안에 이 사건으로 알림을 보냈는가."""
-        return bool(topic) and any(r.get("alerted") and r.get("topic") == topic for r in self.recent(1))
+    def topic_alerted(self, topic: str, tickers: str) -> bool:
+        """topic_hours 안에 같은 사건으로 알림을 보냈는가 (same_event)."""
+        return bool(topic) and any(r.get("alerted") and same_event(topic, tickers, r.get("topic", ""), r.get("tickers", ""))
+                                   for r in self.recent(self.cfg["topic_hours"]))
 
     def pending(self) -> list:
         """아직 판별하지 않은 뉴스. 알릴 만큼 새것을 먼저, 밀린 것은 그 뒤에."""
@@ -1110,9 +1130,10 @@ class Watcher:
                 score, reason, topic, say, ko, summ = result[r["id"]]
                 if ko:
                     r["title_ko"] = ko   # 토스트·텔레그램이 번역 제목을 쓴다
-                # 같은 사건(시진핑 발언 문장마다 뜨는 속보 등)은 한 시간에 한 번만 알린다
+                # 같은 사건(시진핑 발언 문장마다 뜨는 속보, 실적 예고 기사 여럿 등)은 topic_hours 에 한 번만 알린다
                 late = self.is_late(r)
-                alert = (score >= self.cfg["threshold"] and not late and not self.topic_alerted(topic)
+                alert = (score >= self.cfg["threshold"] and not late
+                         and not self.topic_alerted(topic, r.get("tickers", ""))
                          and not self.is_dup(r["title"]))
                 pub = None
                 if alert and r.get("feed") == "google":
@@ -1284,7 +1305,7 @@ def make_handler(watcher: Watcher):
 SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "max_age_min": "알림 시한", "tts": "음성",
                   "tts_voice": "목소리", "tts_voice_en": "영어 언론사 목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
                   "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
-                  "catchup_hours": "밀린 뉴스", "backend": "판별 LLM", "claude_model": "Claude 모델",
+                  "catchup_hours": "밀린 뉴스", "topic_hours": "같은 사건 알림", "backend": "판별 LLM", "claude_model": "Claude 모델",
                   "model": "Ollama 모델", "hide_max_score": "숨기기",
                   "summarize": "구글 기사 요약"}
 

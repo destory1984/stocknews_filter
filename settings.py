@@ -37,12 +37,13 @@ FIELDS = {
     "summarize": ("bool", None),
     "fetch_min": ("select", [(str(m), f"{m}분마다") for m in (1, 3, 5, 10, 15, 30)]),
     "catchup_hours": ("select", [(str(h), f"{h}시간") for h in (3, 6, 12, 24)]),
+    "topic_hours": ("select", [(str(h), f"{h}시간에 한 번") for h in (1, 3, 6, 12, 24)]),
     "backend": ("select", [("auto", "Ollama 먼저, 안 되면 Claude"), ("ollama", "Ollama 만"), ("claude", "Claude 만")]),
     "claude_model": ("select", [("sonnet", "sonnet"), ("opus", "opus")]),
     "model": ("text", None),
     "hide_max_score": ("select", [("-1", "숨기지 않음")] + [(str(i), f"{i}점 이하") for i in range(0, 6)]),
 }
-INT_KEYS = {"threshold", "max_age_min", "fetch_min", "catchup_hours", "hide_max_score"}
+INT_KEYS = {"threshold", "max_age_min", "fetch_min", "catchup_hours", "hide_max_score", "topic_hours"}
 
 
 def apply(cfg: dict, key: str, value) -> tuple:
@@ -197,6 +198,8 @@ def menu(cfg: dict, stocks: list) -> str:
   {row(_label("구글 기사 요약", "Ollama 가 켜져 있을 때만", "구글 뉴스 기사는 제목만 오니, 원문을 받아 본문을 Ollama 로 2~3문장 요약한다. Claude 는 쓰지 않는다. Ollama 가 꺼져 있으면 기다렸다가, 목록이 갱신될 때(15초) 켜진 것을 보면 밀린 것을 요약한다. 목록에서 '요약 받기' 를 누른 것과, 알리기 전에 이미 원문을 받은 알림 대상만 한다. 원문 주소를 풀 때마다 구글에 물어야 하는데, 3분에 한 번씩 물어도 13번째에 막혔기 때문이다. 원문 사이트의 robots.txt 가 막으면 건너뛴다. 본문은 저장하지 않는다. 야후 기사는 RSS 에 딸려 온 설명을 판별 때 함께 줄인다."), _switch(cfg, "summarize", "구글 기사 요약"),
        "구글 뉴스 기사는 제목만 오니, 원문을 받아 본문을 Ollama 로 2~3문장 요약한다. Claude 는 쓰지 않는다. Ollama 가 꺼져 있으면 기다렸다가, 목록이 갱신될 때(15초) 켜진 것을 보면 밀린 것을 요약한다. 목록에서 '요약 받기' 를 누른 것과, 알리기 전에 이미 원문을 받은 알림 대상만 한다. 원문 주소를 풀 때마다 구글에 물어야 하는데, 3분에 한 번씩 물어도 13번째에 막혔기 때문이다. 원문 사이트의 robots.txt 가 막으면 건너뛴다. 본문은 저장하지 않는다. 야후 기사는 RSS 에 딸려 온 설명을 판별 때 함께 줄인다.")}
   {row(_label("밀린 뉴스", "PC 가 잠들었다 깨면 이만큼 거슬러 판별"), _select(cfg, "catchup_hours", "밀린 뉴스"))}
+  {row(_label("같은 사건 알림", "", "판별 모델이 뉴스마다 붙이는 사건 이름(보라)으로 묶는다. 같은 종목이고 이름의 낱말이 겹치면 (마이크론 실적 발표 · 마이크론 4분기 실적) 같은 사건으로 본다. 목록에는 모두 올라온다."), _select(cfg, "topic_hours", "같은 사건 알림"),
+       "판별 모델이 뉴스마다 붙이는 사건 이름(보라)으로 묶는다. 같은 종목이고 이름의 낱말이 겹치면 (마이크론 실적 발표 · 마이크론 4분기 실적) 같은 사건으로 본다. 목록에는 모두 올라온다.")}
   {row(_label("판별 LLM", "", "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다."), _select(cfg, "backend", "판별 LLM"),
        "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다.")}
   {row(_label("Claude 모델"), _select(cfg, "claude_model", "Claude 모델"))}
