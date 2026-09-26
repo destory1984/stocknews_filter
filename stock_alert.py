@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import requests
 
@@ -1225,7 +1225,8 @@ def make_handler(watcher: Watcher):
                     self.end_headers()
                     return
                 self.send_response(303)
-                self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else ""))
+                self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else "")
+                                 + (f"&s={quote(q['s'])}" if q.get("s") else ""))
                 self.end_headers()
             elif u.path == "/ver":   # 페이지가 2초마다 묻는다. 바뀌었으면 목록을 다시 받는다
                 data = str(watcher.ver).encode()
@@ -1242,7 +1243,7 @@ def make_handler(watcher: Watcher):
                 watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
                 ver = watcher.ver
                 n = int(q["n"]) if q.get("n", "").isdigit() else PAGE_SIZE
-                self.send_page(page(watcher, q.get("done"), bool(q.get("all")), n))
+                self.send_page(page(watcher, q.get("done"), bool(q.get("all")), n, q.get("s", "")))
                 mark_shown(ver)   # 이 판까지는 화면에 보였다. 기다리던 음성이 나간다
             else:
                 self.send_page("not found", 404)
@@ -1465,6 +1466,33 @@ def group_sources(stats: list) -> list:
 FB_LABELS = {"10": "🔔10점", "1": "👍", "0": "👎", "00": "🔕0점"}
 
 
+def grading_trend(recs: list, th: int, low: int) -> str:
+    """날짜별 맞힘률. interests.md 를 고친 뒤 나아지는지 보려고 둔다.
+    날짜는 뉴스가 들어온 날 (판별은 들어온 지 몇 분 안에 한다)."""
+    days = {}
+    for r in recs:
+        t = parse_ts(r.get("created_at", ""))
+        if t:
+            days.setdefault(t.astimezone(KST).strftime("%m-%d"), []).append(r)
+    if not days:
+        return ""
+    rows = []
+    for d in sorted(days, reverse=True)[:14]:
+        rs = days[d]
+        up = [r["score"] for r in rs if r["like"]]
+        dn = [r["score"] for r in rs if not r["like"]]
+        uh, dh = sum(1 for x in up if x >= th), sum(1 for x in dn if x <= low)
+        miss = sum(1 for x in up if x <= low) + sum(1 for x in dn if x >= th)
+        pct = lambda h, n: f"{h}/{n} ({h / n:.0%})" if n else "-"
+        rows.append(f"<tr><td>{d}</td><td>{pct(uh, len(up))}</td><td>{pct(dh, len(dn))}</td><td>{miss or ''}</td></tr>")
+    changed = ""
+    if INTERESTS.exists():
+        changed = f" · interests.md 마지막 수정 {datetime.fromtimestamp(INTERESTS.stat().st_mtime, KST):%m-%d %H:%M}"
+    return (f"<p class=why>날짜별 (뉴스가 들어온 날{changed})</p>"
+            "<table class=g><tr><th>날짜</th><th>👍 알림</th><th>👎 숨김</th><th>크게 어긋남</th></tr>"
+            + "".join(rows) + "</table>")
+
+
 def grading_html(watcher: Watcher) -> str:
     """판별 채점: 전하가 준 반응별로 모델 점수가 어땠나, 그리고 크게 어긋난 뉴스."""
     th, low = watcher.cfg["threshold"], watcher.cfg["hide_max_score"]
@@ -1480,6 +1508,7 @@ def grading_html(watcher: Watcher) -> str:
         hit = sum(1 for x in sc if x >= th) if like else sum(1 for x in sc if x <= low)
         rows.append(f"<tr><td>{label}</td><td>{len(sc)}</td><td>{sum(sc) / len(sc):.1f}</td>"
                     f"<td>{min(sc)}~{max(sc)}</td><td>{hit}건 ({hit / len(sc):.0%})</td></tr>")
+    trend = grading_trend(recs, th, low)
     # 크게 어긋난 것: 좋다 했는데 숨김 점수 이하, 싫다 했는데 알림 점수 이상
     miss = [r for r in recs if (r["like"] and r["score"] <= low) or (not r["like"] and r["score"] >= th)]
     items = "".join(
@@ -1490,6 +1519,7 @@ def grading_html(watcher: Watcher) -> str:
             f"<th>맞힘</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
             f"<p class=why>맞힘: 좋다(🔔10·👍) 한 것은 {th}점 이상(알림), 싫다(👎·🔕0) 한 것은 {low}점 이하(숨김)였던 비율. "
             f"그 사이 점수는 맞히지도 틀리지도 않은 것으로 본다.</p>"
+            + trend
             + (f"<p class=why>크게 어긋난 것 {len(miss)}건 — interests.md 를 고칠 때 볼 것</p><ul class=miss>{items}</ul>"
                if miss else "<p class=why>크게 어긋난 것은 없다.</p>"))
 
@@ -1563,9 +1593,18 @@ document.querySelector("#t tbody").addEventListener("click", async (e) => {{
 PAGE_SIZE = 50    # 목록에 한 번에 보이는 뉴스 수 (같은 사건으로 접힌 것도 센다). 맨 아래 '더 보기' 를 누르면 이만큼씩 더
 
 
-def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int = PAGE_SIZE) -> str:
+def tickers_of(r: dict) -> list:
+    """판별 기록의 종목 이름들. 두 종목에 걸린 기사는 tickers 가 "SK하이닉스, 삼성전자" 처럼 온다."""
+    return [x.strip() for x in (r.get("tickers") or "").split(",") if x.strip()]
+
+
+def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int = PAGE_SIZE,
+         stock: str = "") -> str:
+    """판별 목록. stock 을 주면 그 종목 뉴스만 (목록의 종목 이름을 누르면 ?s=종목)."""
     fb = {k: fb_key(v) for k, v in latest_feedback().items()}
     recs = sorted(watcher.judged.values(), key=lambda r: r.get("created_at", ""), reverse=True)
+    if stock:
+        recs = [r for r in recs if stock in tickers_of(r)]
     # 👎·0점 준 뉴스와 점수가 낮은 뉴스는 기본으로 숨긴다.
     # 방금 누른 것은 기록됐다는 표시를 위해, 👍·10점 준 것은 점수와 상관없이 남긴다.
     low = watcher.cfg["hide_max_score"]
@@ -1583,7 +1622,7 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
         recs = [r for r in recs if not hide(r)]
     more = max(0, len(recs) - limit)
     recs = recs[:limit]
-    qs = "&all=1" if show_all else ""
+    qs = ("&all=1" if show_all else "") + (f"&s={quote(stock)}" if stock else "")
     # 같은 사건(topic)은 가장 최근 뉴스 한 줄로 접는다. 6시간 넘게 떨어지면 다른 묶음으로 본다.
     heads, members, order = {}, {}, []
     for r in recs:
@@ -1605,11 +1644,14 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
                if kids else "")
         rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids))
         rows.extend(row_html(k, fb, done, qs, child_of=gid) for k in kids)
+    if stock and not rows:
+        rows.append(f"<tr><td colspan=4 class=why>{html.escape(stock)} 뉴스가 " + ("없습니다." if show_all else
+                    f"보이는 것이 없습니다 (숨긴 {hidden}건은 '모두 보기').") + "</td></tr>")
     note = "<p class=ok>반응을 기록했습니다. 다음 판별부터 반영됩니다.</p>" if done else ""
     if more:   # 목록 표 안에 두어야 15초 자동 갱신 때 같이 바뀐다
         rows.append(f"<tr><td colspan=4 style='text-align:center'><a id=more class=grp>"
                     f"더 보기 (남은 {more}건" + (f" 가운데 {PAGE_SIZE}건" if more > PAGE_SIZE else "") + ")</a></td></tr>")
-    return page_html(watcher, rows, note, show_all, low, hidden, sum(1 for v in fb.values() if v))
+    return page_html(watcher, rows, note, show_all, low, hidden, sum(1 for v in fb.values() if v), stock)
 
 
 def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "") -> str:
@@ -1636,8 +1678,8 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
     topic = f"<span class=tp>{html.escape(r['topic'])}</span>" if r.get("topic") else ""
     source = SOURCE_NAMES.get(r.get("source", ""), r.get("source", ""))
     src = f"<span class=src>{html.escape(source)}</span>" if source else ""
-    if r.get("tickers"):
-        src = f"<span class=stk>{html.escape(r['tickers'])}</span>" + src
+    src = "".join(f"<a class=stk href='/?s={quote(t)}' title='{html.escape(t, quote=True)} 뉴스만 보기'>"
+                  f"{html.escape(t)}</a>" for t in tickers_of(r)) + src
     # 누른 버튼은 불이 켜지고, 다시 누르면 취소된다.
     btns = "".join(
         f"<a class='fb{' num' if v in ('10', '00') else ''}{' on' if state == v else ''}' title='{tip}' "
@@ -1764,20 +1806,26 @@ def earnings_line() -> str:
             "한국 시각: " + " · ".join(parts) + "</details>")
 
 
-def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
+def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int,
+              stock: str = "") -> str:
+    sq = f"&s={quote(stock)}" if stock else ""
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
-    note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
+    note += (f"<a href='/?{sq[1:]}' style='text-decoration:underline'>숨기기</a></p>" if show_all else
              f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사"
-             f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
+             f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다. <a href='/?all=1{sq}' style='text-decoration:underline'>모두 보기</a></p>")
+    if stock:
+        note = (f"<p class=filt><b>{html.escape(stock)}</b> 뉴스만 보는 중 · "
+                f"<a href='/{'?all=1' if show_all else ''}'>모든 종목 보기</a></p>") + note
     stocks = load_stocks()
-    names = " · ".join(html.escape(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
+    names = " · ".join(f"<a class='sname{' on' if x['name'] == stock else ''}' href='/?s={quote(x['name'])}'>"
+                       f"{html.escape(x['name'])}</a>" for x in stocks) or "없음 (⚙ 설정에서 추가)"
     menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
     return f"""<!doctype html><meta charset=utf-8><title>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러</title>
 <style>{settings.CSS}
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} .filt a{{color:#e6e6e6;text-decoration:underline}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
 #recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}}
@@ -1819,7 +1867,7 @@ let keep = null, keepAt = 0;
 let limit = {PAGE_SIZE};   // '더 보기' 를 누를 때마다 늘어난다. 자동 갱신도 이만큼 받는다
 async function refresh() {{
   if (keep && Date.now() - keepAt > 10000) keep = null;
-  const params = new URLSearchParams({{{"all: 1" if show_all else ""}}});
+  const params = new URLSearchParams({json.dumps(dict([("all", "1")] * show_all + [("s", stock)] * bool(stock)))});
   if (limit > {PAGE_SIZE}) params.set("n", limit);
   if (keep) params.set("done", keep);
   try {{
