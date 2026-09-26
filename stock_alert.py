@@ -1628,6 +1628,13 @@ document.querySelector("#t tbody").addEventListener("click", async (e) => {{
 PAGE_SIZE = 50    # 목록에 한 번에 보이는 뉴스 수 (같은 사건으로 접힌 것도 센다). 맨 아래 '더 보기' 를 누르면 이만큼씩 더
 
 
+def unverified_late(r: dict) -> bool:
+    """늦게 들어왔고(구글이 붙인 날짜로 max_age_min 넘게 지나 받음) 원문 날짜를 확인하지 못한 구글 기사.
+    구글은 옛 기사에 새 날짜를 붙이기도 한다 (09-27 에 4월·7월 Stocktwits 기사가 09-25 날짜로 옴).
+    이런 뉴스는 알림도 안 보내니 목록에서도 기본으로 숨긴다 ('모두 보기' 에서는 보인다)."""
+    return bool(r.get("late")) and "news.google.com" in r.get("url", "") and not r.get("published_real")
+
+
 def tickers_of(r: dict) -> list:
     """판별 기록의 종목 이름들. 두 종목에 걸린 기사는 tickers 가 "SK하이닉스, 삼성전자" 처럼 온다."""
     return [x.strip() for x in (r.get("tickers") or "").split(",") if x.strip()]
@@ -1648,7 +1655,7 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
         if r["id"] == done or fb.get(r["id"]) in ("1", "10"):
             return False
         return (fb.get(r["id"]) in ("0", "00") or r["score"] <= low or bool(r.get("stale"))
-                or stocknews.source_key(r.get("source", "")) in muted)
+                or unverified_late(r) or stocknews.source_key(r.get("source", "")) in muted)
 
     # 종목 줄에 붙일 것: 최근 24시간 목록에 보이는 뉴스 수와 최고 점수
     day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -1882,7 +1889,7 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
     # 모두 보기/숨기기 단추는 줄 맨 앞에 둔다 (설명 글 끝에 있으면 찾기 힘들다)
     note += ("<p class=why><a class=tog href='/?" + sq[1:] + "'>숨기기</a> 숨긴 뉴스까지 모두 보는 중</p>" if show_all else
              f"<p class=why><a class=tog href='/?all=1{sq}'>모두 보기</a> "
-             f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사"
+             f"👎·🔕0 준 뉴스{f', {low}점 이하 뉴스' if low >= 0 else ''}, 옛 기사, 늦게 들어온 구글 기사"
              f"{', 가린 언론사' if watcher.cfg.get('hide_sources') else ''} {hidden}건은 숨겼습니다.</p>")
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다.</p>"
     # 종목별 보기 띠는 종목 줄 바로 밑에 둔다 (실적·급등락·최근 알림 칸 아래에 두면 내려가야 보인다)
