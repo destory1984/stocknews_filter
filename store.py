@@ -82,6 +82,15 @@ def _commit(sql: str, args=(), many=False) -> int:
         return cur.rowcount
 
 
+def get_meta(k: str, default: str = "") -> str:
+    row = con().execute("select v from meta where k=?", (k,)).fetchone()
+    return row[0] if row else default
+
+
+def set_meta(k: str, v: str):
+    _commit("insert or replace into meta values (?, ?)", (k, v))
+
+
 # ─────────────────────────────────────────────────────────────
 # news
 # ─────────────────────────────────────────────────────────────

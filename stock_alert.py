@@ -560,8 +560,10 @@ class Summarizer:
         self.running = False
         self.alive = None          # 마지막으로 본 Ollama 상태
         self.checked = 0.0
-        self.busy_until = 0.0      # 구글이 429 로 막으면 이때까지 구글 기사는 쉰다
-        self.blocks = 0            # 잇달아 막힌 횟수. 한 번 통하면 0 으로
+        # 구글이 429 로 막으면 이때까지 구글 기사는 쉰다. 잇달아 막힌 횟수는 한 번 통하면 0 으로.
+        # 둘 다 DB 에 적어 둔다 — 안 그러면 다시 켤 때마다 곧바로 구글에 묻고 또 막힌다 (09-26 20:23)
+        self.busy_until = float(store.get_meta("google_busy_until", "0") or 0)
+        self.blocks = int(store.get_meta("google_blocks", "0") or 0)
         self.last_google = 0.0
         self.done = 0
         self.gate = threading.Lock()   # 구글 링크 풀기는 판별 루프와 요약 스레드가 함께 쓴다
@@ -591,11 +593,21 @@ class Summarizer:
                 rest = self.cfg["google_block_min"] * 2 ** min(self.blocks, 2)
                 self.blocks += 1
                 self.busy_until = time.time() + rest * 60
+                self.save_block()
             log(f"구글이 요청이 많다며 막음 → {rest}분 쉬고 다시")
             raise
-        self.blocks = 0
+        if self.blocks:
+            self.blocks = 0
+            self.save_block()
         self.cache[rec["id"]] = (body, pub)
         return body, pub
+
+    def save_block(self):
+        try:
+            store.set_meta("google_busy_until", f"{self.busy_until:.0f}")
+            store.set_meta("google_blocks", str(self.blocks))
+        except Exception as e:   # 못 적어도 이번 실행 동안은 메모리 값으로 쉰다
+            log(f"구글 막힘 기록 실패: {type(e).__name__}")
 
     def is_stale(self, pub) -> bool:
         return bool(pub) and pub < datetime.now(timezone.utc) - timedelta(days=self.cfg["stale_days"])
