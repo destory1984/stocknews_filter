@@ -47,6 +47,7 @@ import moves
 import settings
 import stocknews
 import store
+import weekly
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
@@ -78,6 +79,7 @@ DEFAULTS = {
     "examples": 15,                # 프롬프트에 넣을 👍, 👎 각각의 최대 개수
     "dup_ratio": 0.6,              # 최근 알린 제목과 이만큼 비슷하면 알리지 않는다
     # 급등락: 15분 사이 이만큼(%) 움직이면 알린다. 3배 ETF 는 따로. 같은 종목은 move_cooldown_min 에 한 번
+    "weekly_notice": "Sun 09:00",   # 이 요일·시각(한국)에 주간 리포트가 나왔다고 한 번 알린다. 비우면 안 알림
     "move_alerts": True,
     "move_pct": 3.0,
     "move_pct_3x": 5.0,
@@ -989,7 +991,48 @@ class Watcher:
             threading.Thread(target=lambda: tg_send(text, silent=quiet_now(self.cfg)), daemon=True).start()
         say_alert(self.cfg, f"{name}, 15분 새 {abs(change):.1f}% {word}", self.ver)
 
+    def weekly_report(self) -> dict:
+        recs = self.recent(24 * 7)
+        fb = {k: v for k, v in latest_feedback().items()}
+        return weekly.build(recs, load_stocks(), fb, self.cfg["threshold"])
+
+    def check_weekly(self):
+        """weekly_notice 요일·시각이 지나면 그 주에 한 번 토스트(·텔레그램)로 알린다. 보낸 주는 DB 에 적는다."""
+        spec = (self.cfg.get("weekly_notice") or "").split()
+        if len(spec) != 2:
+            return
+        now = datetime.now(KST)
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        if spec[0] not in days or now.weekday() != days.index(spec[0]) or now.strftime("%H:%M") < spec[1]:
+            return
+        week = f"{now.isocalendar()[0]}-W{now.isocalendar()[1]:02d}"
+        if store.get_meta("weekly_sent", "") == week:
+            return
+        store.set_meta("weekly_sent", week)
+
+        def job():
+            try:
+                r = self.weekly_report()
+            except Exception as e:
+                log(f"주간 리포트 실패: {type(e).__name__}: {str(e)[:100]}")
+                return
+            url = f"http://127.0.0.1:{self.cfg['port']}/week"
+            log(f"주간 리포트: 뉴스 {r['news']}건, 알림 {r['alerts']}건 → {url}")
+            if self.cfg.get("toast", True):
+                try:
+                    from winotify import Notification
+                    Notification(app_id="종목 뉴스 필터", title="주간 리포트가 나왔습니다",
+                                 msg=f"지난 7일 뉴스 {r['news']}건, 알림 {r['alerts']}건. 눌러서 보기", launch=url).show()
+                except Exception as e:
+                    log(f"주간 리포트 토스트 실패: {type(e).__name__}")
+            if self.cfg.get("telegram"):
+                err = tg_send(weekly.telegram_text(r), silent=quiet_now(self.cfg))
+                if err:
+                    log(f"주간 리포트 텔레그램 실패: {err}")
+        threading.Thread(target=job, daemon=True).start()
+
     def step(self):
+        self.check_weekly()
         self.check_moves()
         self.check_earnings()
         self.fetch()
@@ -1146,6 +1189,8 @@ def make_handler(watcher: Watcher):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif u.path == "/week":
+                self.send_page(week_page(watcher))
             elif u.path == "/sources":
                 self.send_page(sources_page(watcher))
             elif u.path == "/":
@@ -1534,6 +1579,36 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         + f"{group}</div></td></tr>")
 
 
+def week_page(watcher: Watcher) -> str:
+    """주간 리포트 페이지: 지난 7일, 종목별."""
+    r = watcher.weekly_report()
+    now = datetime.now(KST)
+    cards = []
+    for st in sorted(r["stocks"], key=lambda x: (-x["alerts"], -x["news"])):
+        pr = st["price"]
+        move = (f"<b style='color:{'#e06c6c' if pr[2] > 0 else '#6c9be0'}'>{pr[2]:+.1f}%</b> "
+                f"<span class=why>{pr[0]:.2f} → {pr[1]:.2f}</span>") if pr else "<span class=why>값 없음</span>"
+        top = "".join(f"<li>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
+                      f"{html.escape(x.get('title_ko') or x['title'])}</a></li>" for x in st["top"])
+        cards.append(f"<div class=card><div><b>{html.escape(st['name'])}</b> <span class=why>{html.escape(st['ticker'])}</span> · {move}</div>"
+                     f"<div class=why>뉴스 {st['news']}건 · 알림 {st['alerts']}건</div>"
+                     + (f"<ul>{top}</ul>" if top else "") + "</div>")
+    topics = " · ".join(f"{html.escape(t)} {n}건" for t, n in r["topics"]) or "없음"
+    return f"""<!doctype html><meta charset=utf-8><title>주간 리포트 · 종목 뉴스 필터</title>
+<style>
+body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:980px}}
+a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
+h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
+.card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .back{{color:#8ab4f8}}
+</style>
+<p class=why><a class=back href='/'>← 판별 목록</a></p>
+<h2>주간 리포트</h2>
+<p class=why>{(now - timedelta(days=7)):%m-%d} ~ {now:%m-%d %H:%M} · 판별한 뉴스 {r['news']}건 · 알림 {r['alerts']}건 ·
+👍 {r['up']} · 👎 {r['down']} · 등락은 야후 일봉 종가 (7일 전 → 마지막)</p>
+<p class=why>많이 나온 사건 ({watcher.cfg['threshold']}점 이상): {topics}</p>
+{''.join(cards)}"""
+
+
 def moves_html(watcher: Watcher) -> str:
     """목록 위 급등락 칸: 최근 6시간 것만, 새것부터. 원인일 만한 뉴스를 밑에 붙인다."""
     cutoff = datetime.now(KST) - timedelta(hours=6)
@@ -1600,7 +1675,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {earnings_line()}
 {moves_html(watcher)}
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
