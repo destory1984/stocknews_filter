@@ -128,9 +128,9 @@ def stocks_html(stocks: list) -> str:
         j = lambda k: e(", ".join(s.get(k, [])))
         chips.append(
             f"<div class=stock data-name=\"{e(s['name'])}\">"
-            f"<div class=srow><button type=button class=sname aria-expanded=false title='눌러서 자세히 고치기'>"
-            f"{e(s['name'])}{' <small>' + e(s['yahoo']) + '</small>' if s.get('yahoo') else ''}</button>"
-            f"<button type=button class=sdel title='종목에서 빼기' aria-label=삭제>{TRASH}</button></div>"
+            f"<div class=srow><button type=button class=sdel title='종목에서 빼기' aria-label=삭제>{TRASH}</button>"
+            f"<button type=button class=sname aria-expanded=false title='눌러서 자세히 고치기'>"
+            f"{e(s['name'])}{' <small>' + e(s['yahoo']) + '</small>' if s.get('yahoo') else ''}</button></div>"
             f"<div class=sedit hidden>"
             f"<label>이름 <input name=name value=\"{e(s['name'])}\"></label>"
             f"<label>구글 검색어 <input name=google value=\"{e(s.get('google', ''))}\" placeholder=\"{e(s['name'])}\"></label>"
@@ -212,7 +212,8 @@ header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .menu .addrow input{flex:1;min-width:0}
 .menu #saytext{flex:1;min-width:0}
 .menu .stock{padding:0 8px}
-.menu .srow{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--sel)}
+.menu .srow{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--sel)}
+.menu .sname{flex:1}
 .menu .sname{font:inherit;font-weight:600;border:0;background:none;color:var(--text);cursor:pointer;padding:4px 0;text-align:left}
 .menu .sname small{font-weight:400;color:var(--muted)} .menu .sname:hover,.menu .sname[aria-expanded="true"]{color:var(--down)}
 .menu .sdel{font:inherit;border:0;background:none;color:var(--muted);cursor:pointer;border-radius:4px;padding:3px 5px;display:inline-flex;align-items:center}
