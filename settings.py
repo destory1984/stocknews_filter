@@ -32,6 +32,7 @@ FIELDS = {
     "quiet_on": ("bool", None),
     "tts_quiet": ("quiet", None),
     "telegram": ("bool", None),
+    "summarize": ("bool", None),
     "fetch_min": ("select", [(str(m), f"{m}분마다") for m in (1, 3, 5, 10, 15, 30)]),
     "catchup_hours": ("select", [(str(h), f"{h}시간") for h in (3, 6, 12, 24)]),
     "backend": ("select", [("auto", "Ollama 먼저, 안 되면 Claude"), ("ollama", "Ollama 만"), ("claude", "Claude 만")]),
@@ -180,6 +181,8 @@ def menu(cfg: dict, stocks: list) -> str:
   <div class=mhead>수집 · 판별</div>
   {row(_label("뉴스 받는 간격", "", "구글 뉴스 RSS 는 종목마다 한 번, 야후는 티커마다 한 번 부른다. 너무 자주 부르면 막힐 수 있다."), "<span class=mbtns><button type=button class=hbtn id=fetchnow title='지금 한 번 받는다'>지금 받기</button>" + _select(cfg, "fetch_min", "뉴스 받는 간격") + "</span>",
        "구글 뉴스 RSS 는 종목마다 한 번, 야후는 티커마다 한 번 부른다. 너무 자주 부르면 막힐 수 있다.")}
+  {row(_label("구글 기사 요약", "Ollama 가 켜져 있을 때만", "구글 뉴스 기사는 제목만 오니, 원문을 받아 본문을 Ollama 로 2~3문장 요약한다. Claude 는 쓰지 않는다. Ollama 가 꺼져 있으면 기다렸다가, 목록이 갱신될 때(15초) 켜진 것을 보면 밀린 것을 요약한다. 목록에 보이는 뉴스만, 원문 사이트의 robots.txt 가 막으면 건너뛴다. 본문은 저장하지 않는다. 야후 기사는 RSS 에 딸려 온 설명을 판별 때 함께 줄인다."), _switch(cfg, "summarize", "구글 기사 요약"),
+       "구글 뉴스 기사는 제목만 오니, 원문을 받아 본문을 Ollama 로 2~3문장 요약한다. Claude 는 쓰지 않는다. Ollama 가 꺼져 있으면 기다렸다가, 목록이 갱신될 때(15초) 켜진 것을 보면 밀린 것을 요약한다. 목록에 보이는 뉴스만, 원문 사이트의 robots.txt 가 막으면 건너뛴다. 본문은 저장하지 않는다. 야후 기사는 RSS 에 딸려 온 설명을 판별 때 함께 줄인다.")}
   {row(_label("밀린 뉴스", "PC 가 잠들었다 깨면 이만큼 거슬러 판별"), _select(cfg, "catchup_hours", "밀린 뉴스"))}
   {row(_label("판별 LLM", "", "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다."), _select(cfg, "backend", "판별 LLM"),
        "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다.")}

@@ -1,5 +1,5 @@
 """
-종목 뉴스 알리미 (saveticker 필터링의 news_alert.py 를 가져와 뉴스 출처만 바꾼 것)
+종목 뉴스 필터 (saveticker 필터링의 news_alert.py 를 가져와 뉴스 출처만 바꾼 것)
 
   fetch_min 분마다 watchlist.json 의 종목 뉴스를 구글 뉴스·야후 파이낸스 RSS 에서 받아
   data/stocknews_날짜.csv 에 쌓는다 (stocknews.py 의 키워드 거름망을 먼저 거친다).
@@ -41,15 +41,16 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+import article
 import settings
 import stocknews
+import store
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
 CONFIG = BASE / "stock_alert_config.json"
 INTERESTS = BASE / "interests.md"
-JUDGED = BASE / "news_judged.jsonl"      # 판별 기록 (재시작해도 다시 묻지 않게)
-FEEDBACK = BASE / "news_feedback.jsonl"  # 👍/👎 기록
+# 뉴스·판별·반응 기록은 data/stocknews.db (store.py). 옛 news_judged.jsonl·CSV 는 처음 켤 때 옮겨 온다
 
 KST = timezone(timedelta(hours=9))
 
@@ -83,6 +84,11 @@ DEFAULTS = {
     "tts_quiet": "23:00-07:00",    # 조용한 시각: 말하지 않는다 (토스트·텔레그램은 소리 없이 그대로)
     "toast": True,                 # 윈도우 토스트
     "telegram": False,             # 텔레그램으로도 보낸다 (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수)
+    # 구글 기사 요약: 원문을 받아 Ollama 로만 요약한다 (Claude 는 쓰지 않는다). Ollama 가 꺼져 있으면
+    # 판별 목록이 갱신될 때마다(15초) 켜졌는지 보고, 켜지면 밀린 것을 요약한다
+    "summarize": True,
+    "summary_hours": 48,           # 이 시간 안에 판별한 뉴스만 요약한다
+    "google_gap_sec": 30,          # 구글 링크 풀기 사이 간격. 자주 부르면 구글이 429 로 막는다
 }
 
 PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
@@ -115,7 +121,7 @@ PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
 {news}
 
 JSON 만 출력하라. 다른 말은 쓰지 마라.
-{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "왜 관심 있을지 15자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부", "ko": "제목이 영어면 자연스러운 한국어 제목으로 번역, 한국어 제목이면 빈 문자열"}}]}}
+{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "왜 관심 있을지 15자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부", "ko": "제목이 영어면 자연스러운 한국어 제목으로 번역, 한국어 제목이면 빈 문자열", "sum": "[설명] 이 있으면 그 내용을 한국어 1~2문장으로 요약, 없으면 빈 문자열"}}]}}
 """
 
 
@@ -141,26 +147,6 @@ def log(msg: str):
         pass
 
 
-def read_jsonl(path: Path) -> list:
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            pass
-    return out
-
-
-_lock = threading.Lock()
-
-
-def append_jsonl(path: Path, rec: dict):
-    with _lock, path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-
 # ─────────────────────────────────────────────────────────────
 # 뉴스 읽기
 # ─────────────────────────────────────────────────────────────
@@ -172,16 +158,10 @@ def parse_ts(s: str):
         return None
 
 
-CSV_FIELDS = ["id", "created_at", "found_at", "tickers", "feed", "source", "title", "url", "summary"]
-
-
-def csv_path(day: datetime) -> Path:
-    return DATA / f"stocknews_{day:%Y-%m-%d}.csv"
-
-
 def fetch_news(cfg: dict) -> int:
-    """구글 뉴스·야후 RSS 에서 종목 뉴스를 받아 오늘 CSV 에 덧붙인다. 새로 넣은 건수를 돌려준다.
-    id 는 링크의 해시. 두 종목에 함께 걸린 기사는 한 줄로 두고 tickers 에 둘 다 적는다."""
+    """구글 뉴스·야후 RSS 에서 종목 뉴스를 받아 DB 에 넣는다. 새로 넣은 건수를 돌려준다.
+    id 는 링크의 해시. 두 종목에 함께 걸린 기사는 한 줄로 두고 tickers 에 둘 다 적는다.
+    구글과 야후가 같은 기사를 다른 링크로 주는 일이 있어, 최근 이틀 안에 같은 제목이 있으면 넣지 않는다."""
     try:
         stocks = stocknews.load_watchlist()
     except SystemExit as e:
@@ -189,7 +169,8 @@ def fetch_news(cfg: dict) -> int:
         return 0
     rows = stocknews.collect(stocks, cfg["lookback_days"], ["google", "yahoo"],
                              on_error=lambda m: log(f"수집 실패 {m}"))
-    known = {r["id"] for r in read_news()}
+    known = store.known_ids()
+    titles = {stocknews.norm_title(t) for t in store.recent_titles()}
     now = datetime.now(timezone.utc)
     new = {}
     for r in rows:
@@ -200,34 +181,20 @@ def fetch_news(cfg: dict) -> int:
             if r["stock"] not in new[rid]["tickers"]:
                 new[rid]["tickers"] += f", {r['stock']}"
             continue
+        key = stocknews.norm_title(r["title"])
+        if key in titles:
+            continue
+        titles.add(key)
         new[rid] = {"id": rid, "created_at": (r["published"] or now).isoformat(timespec="seconds"),
                     "found_at": now.isoformat(timespec="seconds"), "tickers": r["stock"],
                     "feed": r["feed"], "source": r["source"], "title": r["title"],
-                    "url": r["link"], "summary": r["summary"][:300]}
-    if new:
-        DATA.mkdir(exist_ok=True)
-        path = csv_path(datetime.now(KST))
-        fresh = not path.exists()
-        with path.open("a", encoding="utf-8-sig" if fresh else "utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            if fresh:
-                w.writeheader()
-            w.writerows(sorted(new.values(), key=lambda r: r["created_at"]))
-    return len(new)
+                    "url": r["link"], "rss_summary": r["summary"][:600]}
+    return store.add_news(sorted(new.values(), key=lambda r: r["created_at"])) if new else 0
 
 
 def read_news(days: int = 2) -> list:
-    """최근 며칠치 CSV 의 행."""
-    rows = []
-    for d in range(days):
-        path = csv_path(datetime.now(KST) - timedelta(days=d))
-        if not path.exists():
-            continue
-        try:
-            with path.open(encoding="utf-8-sig", newline="") as f:
-                rows.extend(csv.DictReader(f))
-        except (OSError, csv.Error, UnicodeDecodeError):
-            continue
+    """최근 며칠 안에 받은 뉴스."""
+    rows = store.read_news(days)
     for r in rows:
         r["ts"] = parse_ts(r.get("created_at", ""))
     return [r for r in rows if r.get("id") and r["ts"]]
@@ -242,7 +209,10 @@ def news_line(r: dict) -> str:
     if r.get("title_en") and r["title_en"] != t:
         t += f" / {r['title_en']}"
     extra = " ".join(x for x in (r.get("tickers"), r.get("labels")) if x)
-    return f"{t}" + (f" ({extra})" if extra else "")
+    line = f"{t}" + (f" ({extra})" if extra else "")
+    if r.get("summary"):   # 야후는 RSS 에 기사 설명이 딸려 온다
+        line += f"\n   [설명] {r['summary'][:400]}"
+    return line
 
 
 def is_english(title: str) -> bool:
@@ -263,10 +233,7 @@ def fb_key(rec) -> str:
 
 
 def latest_feedback() -> dict:
-    fb = {}
-    for rec in read_jsonl(FEEDBACK):   # 같은 뉴스에 여러 번 누르면 마지막 것
-        fb[rec["id"]] = rec
-    return fb
+    return store.latest_feedback()   # 같은 뉴스에 여러 번 누르면 마지막 것
 
 
 def examples_text(n: int) -> str:
@@ -319,7 +286,8 @@ def ask_ollama(cfg: dict, prompt: str, timeout: float) -> str:
 
 
 def parse_results(text: str, batch: list) -> dict:
-    """{id: (score, reason, topic, say, ko)}. 모델이 빠뜨린 뉴스는 결과에 없다. ko 는 영어 제목의 번역."""
+    """{id: (score, reason, topic, say, ko, sum)}. 모델이 빠뜨린 뉴스는 결과에 없다.
+    ko 는 영어 제목의 번역, sum 은 RSS 설명(야후)의 한국어 요약."""
     try:
         items = json.loads(text).get("results", [])
     except (ValueError, AttributeError):
@@ -337,12 +305,13 @@ def parse_results(text: str, batch: list) -> dict:
         if 1 <= i <= len(batch):
             out[batch[i - 1]["id"]] = (max(0, min(10, score)), str(it.get("reason", "")).strip(),
                                        str(it.get("topic", "")).strip(), str(it.get("say", "")).strip(),
-                                       str(it.get("ko", "") or "").strip() if is_english(batch[i - 1]["title"]) else "")
+                                       str(it.get("ko", "") or "").strip() if is_english(batch[i - 1]["title"]) else "",
+                                       str(it.get("sum", "") or "").strip() if batch[i - 1].get("summary") else "")
     return out
 
 
 def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
-    """({id: (score, reason, topic, say, ko)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
+    """({id: (score, reason, topic, say, ko, sum)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
     prompt = PROMPT.format(
         interests=INTERESTS.read_text(encoding="utf-8") if INTERESTS.exists() else "(없음)",
         examples=examples_text(cfg["examples"]),
@@ -546,7 +515,7 @@ def toast(cfg: dict, r: dict, score: int, reason: str):
         log("winotify 가 없어 토스트를 띄우지 못했다. pip install winotify")
         return
     fb = f"http://127.0.0.1:{cfg['port']}/fb?id={r['id']}"
-    n = Notification(app_id="종목 뉴스 알리미", title=f"[{score}점] {r.get('tickers', '')} · {reason}",
+    n = Notification(app_id="종목 뉴스 필터", title=f"[{score}점] {r.get('tickers', '')} · {reason}",
                      msg=(r.get("title_ko") or r["title"])[:200], launch=r["url"])
     # 말로 읽을 때는 토스트 소리를 끈다. 말머리 소리와 겹치면 뉴스 알림인지 헷갈린다
     speaking = cfg["tts"] and not quiet_now(cfg)
@@ -556,13 +525,136 @@ def toast(cfg: dict, r: dict, score: int, reason: str):
     n.show()
 
 
+SUMMARY_PROMPT = """아래는 뉴스 기사 본문이다. 투자자가 알아야 할 핵심을 한국어 2~3문장(150자 안팎)으로 요약하라.
+제목을 되풀이하지 말고, 숫자(금액·비율·날짜)는 살려라. 본문이 기사가 아니면(구독·로그인 안내, 오류 페이지) sum 을 빈 문자열로 둬라.
+JSON 만 출력하라: {{"sum": "요약"}}
+
+[제목] {title}
+[본문]
+{body}
+"""
+
+
+class Summarizer:
+    """목록에 보이는 뉴스(숨김 점수 초과)를 한국어로 요약한다. Ollama 로만 한다.
+    - 야후: RSS 설명을 줄인다 (판별 때 못 한 옛 기록만. 새 것은 판별 때 함께 한다)
+    - 구글: 구글 링크를 풀어 원문을 받고 본문을 요약한다. 본문은 저장하지 않는다.
+    Ollama 가 꺼져 있으면 아무것도 하지 않는다. poke() 는 판별 목록이 갱신될 때마다 불린다."""
+
+    def __init__(self, watcher: "Watcher"):
+        self.w = watcher
+        self.running = False
+        self.alive = None          # 마지막으로 본 Ollama 상태
+        self.checked = 0.0
+        self.busy_until = 0.0      # 구글이 429 로 막으면 이때까지 구글 기사는 쉰다
+        self.last_google = 0.0
+        self.done = 0
+
+    @property
+    def cfg(self):
+        return self.w.cfg
+
+    def ollama_alive(self) -> bool:
+        base = self.cfg["ollama_url"].split("/api/")[0]
+        try:
+            self.alive = requests.get(base + "/api/tags", timeout=2).ok
+        except requests.RequestException:
+            self.alive = False
+        self.checked = time.time()
+        return self.alive
+
+    def pending(self) -> list:
+        todo = store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"])
+        if time.time() < self.busy_until:
+            todo = [r for r in todo if r.get("feed") != "google"]
+        return todo
+
+    def status(self) -> str:
+        if not self.cfg.get("summarize"):
+            return "요약 꺼짐"
+        n = len(store.summary_todo(self.cfg["hide_max_score"], self.cfg["summary_hours"]))
+        if self.alive is False:
+            return f"요약: Ollama 꺼짐 · 켜지면 {n}건 요약" if n else "요약: Ollama 꺼짐"
+        if time.time() < self.busy_until:
+            return f"요약: 구글이 잠시 막아 {datetime.fromtimestamp(self.busy_until):%H:%M} 부터 다시 · 남은 {n}건"
+        return f"요약 중 · 남은 {n}건" if self.running else (f"요약 대기 {n}건" if n else "요약 다 됨")
+
+    def poke(self):
+        if self.running or not self.cfg.get("summarize"):
+            return
+        self.running = True
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            if not self.pending() or not self.ollama_alive():
+                return
+            for rec in self.pending()[:20]:
+                if not self.cfg.get("summarize") or not self.one(rec):
+                    break
+        except Exception as e:
+            log(f"요약 오류: {type(e).__name__}: {str(e)[:120]}")
+        finally:
+            self.running = False
+
+    def one(self, rec: dict) -> bool:
+        """한 건 요약. 계속해도 되면 True, 멈춰야 하면(Ollama 꺼짐·구글 429) False."""
+        if rec.get("feed") == "google":
+            wait = self.cfg["google_gap_sec"] - (time.time() - self.last_google)
+            if wait > 0:
+                time.sleep(wait)
+            self.last_google = time.time()
+            try:
+                _, body = article.fetch_body(rec["url"])
+            except article.Busy:
+                self.busy_until = time.time() + 1800
+                log("요약: 구글이 요청이 많다며 막음 → 30분 쉬고 다시")
+                return False
+            except article.Skip as e:
+                self.save(rec, "", f"skip:{e}")
+                return True
+            except requests.RequestException as e:
+                self.save(rec, "", f"skip:{type(e).__name__}")
+                return True
+        else:
+            body = rec.get("rss_summary") or ""
+            if not body:
+                self.save(rec, "", "skip:설명 없음")
+                return True
+        prompt = SUMMARY_PROMPT.format(title=rec["title"], body=body)
+        try:
+            text = ask_ollama(self.cfg, prompt, self.cfg["ollama_timeout_sec"])
+        except Exception as e:   # Ollama 가 꺼졌다. 이 기사는 요약 전으로 남겨 다음에 다시
+            self.alive = False
+            log(f"요약: Ollama 실패 → 다음에 다시 ({type(e).__name__})")
+            return False
+        m = re.search(r"\{.*\}", text, re.S)
+        try:
+            summ = str(json.loads(m.group(0)).get("sum", "")).strip() if m else ""
+        except ValueError:
+            summ = ""
+        self.save(rec, summ, "done" if summ else "skip:요약할 내용 없음")
+        return True
+
+    def save(self, rec: dict, summ: str, state: str):
+        live = self.w.judged.get(rec["id"], rec)
+        live.update(summary_ko=summ or None, summary_by="ollama" if summ else None, summary_state=state)
+        live.pop("feed", None)
+        live.pop("rss_summary", None)
+        store.save_judged(live)
+        if summ:
+            self.done += 1
+            log(f"요약 {live.get('title_ko') or live['title']}"[:80] + f" — {summ[:60]}")
+
+
 class Watcher:
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.judged = {rec["id"]: rec for rec in read_jsonl(JUDGED)}
+        self.judged = store.load_judged()
         self.recent_alerts = []   # (시각, 제목) — 비슷한 후속 보도를 거르려고
         self.first_seen = {}      # id → 처음 본 시각
         self.last_fetch = 0.0     # 마지막으로 RSS 를 받은 시각 (time.time)
+        self.summarizer = Summarizer(self)
         self.fetch_note = "아직 받지 않음"
 
     def fetch(self):
@@ -621,6 +713,7 @@ class Watcher:
 
     def step(self):
         self.fetch()
+        self.summarizer.poke()
         todo = self.pending()
         if not todo:
             return
@@ -643,7 +736,7 @@ class Watcher:
             for r in batch:
                 if r["id"] not in result:
                     continue
-                score, reason, topic, say, ko = result[r["id"]]
+                score, reason, topic, say, ko, summ = result[r["id"]]
                 if ko:
                     r["title_ko"] = ko   # 토스트·텔레그램이 번역 제목을 쓴다
                 # 같은 사건(시진핑 발언 문장마다 뜨는 속보 등)은 한 시간에 한 번만 알린다
@@ -655,8 +748,10 @@ class Watcher:
                        "created_at": r["created_at"], "score": score, "reason": reason, "topic": topic,
                        "say": say, "title_ko": ko, "alerted": alert, "late": late, "by": by,
                        "at": datetime.now(KST).isoformat(timespec="seconds")}
+                if summ:   # 야후 설명을 판별 때 줄인 것. 구글 기사는 요약 스레드가 나중에 채운다
+                    rec.update(summary_ko=summ, summary_by="rss", summary_state="done")
                 self.judged[r["id"]] = rec
-                append_jsonl(JUDGED, rec)
+                store.save_judged(rec)
                 mark = "🔔" if alert else "⏰" if late and score >= self.cfg["threshold"] else "  "
                 log(f"{mark} {score:>2} [{topic}] {r['title'][:70]}  — {reason}")
                 if alert:
@@ -678,7 +773,7 @@ class Watcher:
                 return
             for r, ko in zip(batch, kos):
                 r["title_ko"] = ko
-                append_jsonl(JUDGED, r)
+                store.save_judged(r)
                 done += bool(ko)
         if recs:
             log(f"지난 영어 제목 {done}/{len(recs)}건 번역")
@@ -719,9 +814,8 @@ def make_handler(watcher: Watcher):
                 rec = watcher.judged[q["id"]]
                 # v=10 10점, v=1 👍, v=0 👎, v=00 0점, v=x 누른 것을 다시 눌러 취소
                 like, strong = FB_VALUES.get(q.get("v"), (None, False))
-                append_jsonl(FEEDBACK, {"id": rec["id"], "title": rec["title"], "like": like,
-                                        "strong": strong,
-                                        "at": datetime.now(KST).isoformat(timespec="seconds")})
+                store.add_feedback({"id": rec["id"], "title": rec["title"], "like": like, "strong": strong,
+                                    "at": datetime.now(KST).isoformat(timespec="seconds")})
                 log(f"{FB_LABELS.get(q.get('v'), '취소')} {rec['title'][:70]}")
                 if q.get("ajax"):     # 페이지 스크립트가 부른 것: 이동 없이 기록만
                     self.send_response(204)
@@ -731,6 +825,7 @@ def make_handler(watcher: Watcher):
                 self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else ""))
                 self.end_headers()
             elif u.path == "/":
+                watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
                 self.send_page(page(watcher, q.get("done"), bool(q.get("all"))))
             else:
                 self.send_page("not found", 404)
@@ -771,7 +866,8 @@ SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "ma
                   "tts_voice": "목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
                   "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
                   "catchup_hours": "밀린 뉴스", "backend": "판별 LLM", "claude_model": "Claude 모델",
-                  "model": "Ollama 모델", "hide_max_score": "숨기기"}
+                  "model": "Ollama 모델", "hide_max_score": "숨기기",
+                  "summarize": "구글 기사 요약"}
 
 
 def set_setting(watcher: Watcher, body: dict) -> dict:
@@ -797,7 +893,7 @@ def say_test(watcher: Watcher, body: dict) -> dict:
 
 
 def telegram_test(watcher: Watcher, body: dict) -> dict:
-    err = tg_send("종목 뉴스 알리미 시험 메시지입니다. 이 메시지가 보이면 알림도 여기로 옵니다.")
+    err = tg_send("종목 뉴스 필터 시험 메시지입니다. 이 메시지가 보이면 알림도 여기로 옵니다.")
     return {"ok": not err, "msg": err}
 
 
@@ -838,19 +934,11 @@ def load_stocks() -> list:
 
 
 def reset_records(watcher: Watcher, what: str) -> list:
-    """반응 기록(과 판별 기록)을 지운다. 실제로는 이름을 바꿔 백업으로 남긴다."""
-    stamp = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
-    files = [FEEDBACK] + ([JUDGED] if what == "all" else [])
-    moved = []
-    with _lock:
-        for path in files:
-            if path.exists():
-                backup = path.with_name(f"{path.stem}.{stamp}.bak{path.suffix}")
-                path.rename(backup)
-                moved.append(backup.name)
-        if what == "all":
-            watcher.judged.clear()
-            watcher.first_seen.clear()
+    """반응 기록(과 판별 기록)을 지운다. 실제로는 DB 표 이름을 바꿔 백업으로 남긴다."""
+    moved = store.reset(what)
+    if what == "all":
+        watcher.judged.clear()
+        watcher.first_seen.clear()
     log(f"처음부터 다시 ({what}): {', '.join(moved) or '지울 기록 없음'}")
     return moved
 
@@ -937,7 +1025,8 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         f"<td><a{' class=rated' if state else ''} href='{html.escape(r['url'])}' target=_blank"
         f"{' title=' + chr(39) + html.escape(r['title'], quote=True) + chr(39) if r.get('title_ko') else ''}>"
         f"{html.escape(r.get('title_ko') or r['title'])}</a>"
-        f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}{group}</div></td></tr>")
+        + (f"<div class=sum>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
+        + f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}{group}</div></td></tr>")
 
 
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
@@ -947,31 +1036,31 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
     stocks = load_stocks()
     names = " · ".join(html.escape(x["name"]) for x in stocks) or "없음 (⚙ 설정에서 추가)"
     menu = settings.menu(dict(watcher.cfg, _tg_ready=tg_ready()), stocks)
-    return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 알리미</title>
+    return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 필터</title>
 <style>{settings.CSS}
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.sum{{color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
-<header><h2>종목 뉴스 알리미 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
+<header><h2>종목 뉴스 필터 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
   <span class=fsz><button class=hbtn id=fsdown title="글자 작게" aria-label="글자 작게">가-</button><button class=hbtn id=fsup title="글자 크게" aria-label="글자 크게">가+</button></span>
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline>종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note}</p>
+<p class=why id=stockline>종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
   <a id=reset-all data-n="{n_fb}" data-j="{len(watcher.judged)}">반응과 판별 기록 모두 지우기 ({n_fb}건 · {len(watcher.judged)}건)</a>
-  — 지운 기록은 같은 폴더에 .bak 파일로 남는다</p>
+  — 지운 기록은 DB 안에 백업 표로 남는다</p>
 <script>{settings.JS}</script>
 <script>
 // 처음부터 다시: 지우기 전에 반드시 한 번 더 묻는다
 async function resetRecords(what, msg) {{
-  if (!confirm(msg + "\\n\\n정말 지우시겠습니까? (기록은 .bak 파일로 옮겨져 되살릴 수 있습니다)")) return;
+  if (!confirm(msg + "\\n\\n정말 지우시겠습니까? (기록은 DB 안의 백업 표로 옮겨져 되살릴 수 있습니다)")) return;
   const r = await fetch("/reset?what=" + what, {{method: "POST", headers: {{"X-Reset": "yes"}}}});
   const d = r.ok ? await r.json() : null;
   alert(d ? "지웠습니다. 백업: " + (d.moved.join(", ") || "(지울 기록 없음)") : "지우지 못했습니다 (" + r.status + ")");
@@ -1045,7 +1134,7 @@ class Server(ThreadingHTTPServer):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="종목 뉴스 알리미")
+    ap = argparse.ArgumentParser(description="종목 뉴스 필터")
     ap.add_argument("--test", type=int, metavar="N", help="최근 N건만 판별해 출력하고 끝낸다")
     ap.add_argument("--before", metavar="TIME", help="--test 에서 이 한국 시각까지의 뉴스만 (예: '2026-09-24 23:50')")
     ap.add_argument("--say", metavar="TEXT", help="음성 알림을 한 번 내 보고 끝낸다")
@@ -1061,6 +1150,7 @@ def main():
         return
 
     if args.test:
+        store.migrate(log)
         log(f"RSS 새 뉴스 {fetch_news(cfg)}건")
         rows = sorted(read_news(), key=lambda r: r["ts"])
         if args.before:   # 예: "2026-09-24 23:50" (한국 시각)
@@ -1076,13 +1166,14 @@ def main():
             res, by = judge(cfg, batch, topics)
             log(f"{len(batch)}건 판별 {time.time() - t0:.1f}초 ({by})")
             for r in batch:
-                score, reason, topic, say, ko = res.get(r["id"], (None, "(응답 없음)", "", "", ""))
+                score, reason, topic, say, ko, summ = res.get(r["id"], (None, "(응답 없음)", "", "", "", ""))
                 mark = "🔔" if score is not None and score >= cfg["threshold"] else "  "
                 print(f"{mark} {score if score is not None else '-':>2} [{topic}] {r['title'][:70]}  — {reason}  🗣 {say}")
                 if topic and topic not in topics:
                     topics.insert(0, topic)
         return
 
+    store.migrate(log)
     watcher = Watcher(cfg)
     try:
         server = Server(("127.0.0.1", cfg["port"]), make_handler(watcher))

@@ -1,4 +1,4 @@
-# stocknews_filter (종목 뉴스 알리미)
+# stocknews_filter (종목 뉴스 필터)
 
 내가 고른 종목의 뉴스를 구글 뉴스와 야후 파이낸스에서 모아, LLM 이 알릴 만한 것만 골라 윈도우 알림과 음성으로 알려준다.
 화면·음성·알림·판별 방식은 [saveticker_filter](https://github.com/destory1984/saveticker_filter) 와 같다. 다른 점은 뉴스를 받아 오는 곳뿐이다.
@@ -14,7 +14,7 @@
 
 ```
 구글 뉴스 RSS ─┐                             stock_alert.py
-               ├─ stocknews.py ──▶ data/stocknews_날짜.csv ──▶ LLM 판별 (ollama → 안 되면 claude CLI)
+               ├─ stocknews.py ──▶ data/stocknews.db ────────▶ LLM 판별 (ollama → 안 되면 claude CLI)
 야후 RSS ──────┘  5분마다, 종목 키워드로 1차 거름                  7점 이상이면 윈도우 토스트 + 음성
                                                                http://127.0.0.1:18766  판별 목록 · 🔔10 👍 👎 🔕0 반응
 ```
@@ -30,6 +30,9 @@ saveticker_filter 는 사이트가 봇을 막아서 Edge 확장으로 뉴스를 
 | `stocknews.py` | 구글 뉴스·야후 RSS 를 읽고 종목 키워드로 거른다. 혼자 돌려 목록만 볼 수도 있다 |
 | `watchlist.json` | 종목 목록. `watchlist.example.json` 을 복사해 고친다 |
 | `interests.md` | 판별 기준이 되는 관심사. 고치면 다음 판별부터 반영된다 |
+| `store.py` | 뉴스·판별·반응 기록을 SQLite 한 파일(`data/stocknews.db`)에 둔다. koreainvest 의 `bars.db` 와 같은 방식(WAL) |
+| `article.py` | 구글 뉴스 링크를 풀어 원문 주소를 찾고 본문 글자를 뽑는다 (요약용, 저장하지 않음) |
+| `settings.py` | ⚙ 설정 창 |
 | `stock_alert_config.json` | 모델, 기준 점수, 포트, 수집 간격 등. 처음 실행할 때 만들어진다 |
 | `stock_alert_bg.vbs` / `stock_alert_stop.bat` | 창 없이 백그라운드 실행 / 종료 |
 
@@ -83,6 +86,23 @@ saveticker_filter 와 같다.
 - `python stock_alert.py --test 15` 로 최근 15건을 판별만 해 볼 수 있다.
 - 영어 제목은 판별할 때 한국어로 번역한다 (따로 부르지 않고 판별과 한 번에). 목록·토스트·텔레그램에 번역 제목이 나오고,
   목록에서 제목에 마우스를 올리면 원문이 보인다.
+
+## 요약
+
+- **야후**: RSS 에 기사 설명(2~3문장)이 딸려 온다. 판별할 때 이 설명을 한국어 1~2문장으로 줄여 제목 밑에 붙인다.
+- **구글**: RSS 에 제목만 온다. 구글 링크를 풀어 원문을 받고, 본문을 **Ollama 로만** 2~3문장 요약한다. Claude 는 쓰지 않는다.
+  - Ollama 가 꺼져 있으면 기다린다. 판별 목록이 갱신될 때(15초)마다 Ollama 가 켜졌는지 보고, 켜지면 밀린 것을 요약한다.
+  - 목록에 보이는 뉴스(숨김 점수 초과)만, 최근 48시간 것만 요약한다.
+  - 구글 링크를 자주 풀면 구글이 429 로 막는다. 2026-09-26 에 쉬지 않고 14건을 풀자 7번째부터 막혔다.
+    그래서 30초에 한 건씩 풀고, 막히면 30분 쉰다. 300건이면 2시간 반쯤 걸린다.
+  - 원문 사이트의 robots.txt 가 막으면 받지 않는다. 본문은 요약에만 쓰고 저장하지 않는다.
+- 설정 창의 **구글 기사 요약** 스위치로 끈다.
+
+## 기록 (DB)
+
+`data/stocknews.db` (SQLite) 한 파일에 뉴스(`news`), 판별(`judged`), 반응(`feedback`)을 둔다.
+예전 판의 `data/stocknews_날짜.csv`, `news_judged.jsonl`, `news_feedback.jsonl` 은 처음 켤 때 DB 로 옮기고, 옛 파일은 지우지 않는다.
+처음부터 다시 는 표를 지우지 않고 `feedback_bak_날짜` 처럼 이름을 바꿔 DB 안에 남긴다.
 
 ## 목록만 보고 싶을 때
 
