@@ -10,3 +10,4 @@ news_feedback.jsonl
 *.log
 .env
 __pycache__/
+*.tmp

@@ -109,11 +109,19 @@ def keep(item, stock, since):
     if item["source"].lower() in (x.lower() for x in stock.get("exclude_sources", [])):
         return False
     text = (item["title"] + " " + item["summary"]).lower()
-    excludes = [w.lower() for w in stock.get("exclude", [])]
-    if any(w in text for w in excludes):
+    if any(contains(text, w) for w in stock.get("exclude", [])):
         return False
-    keywords = [w.lower() for w in stock.get("keywords", []) if w]
-    return not keywords or any(w in text for w in keywords)
+    keywords = [w for w in stock.get("keywords", []) if w]
+    return not keywords or any(contains(text, w) for w in keywords)
+
+
+def contains(text, word):
+    """English words must match as whole words, so a ticker like MU does not
+    match "much". Korean has particles glued on (삼성전자가), so plain substring."""
+    word = word.lower()
+    if word.isascii():
+        return re.search(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])", text) is not None
+    return word in text
 
 
 def default_keywords(stock):
@@ -146,6 +154,48 @@ def load_watchlist():
                  f"{WATCHLIST.name} or pass stock names on the command line.")
     with open(WATCHLIST, encoding="utf-8") as f:
         return json.load(f)
+
+
+def save_watchlist(stocks):
+    tmp = WATCHLIST.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(stocks, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, WATCHLIST)
+
+
+def new_stock(name, yahoo=""):
+    """Watchlist entry from a name and an optional Yahoo ticker.
+    An English name searches English Google News ("Micron stock")."""
+    name, yahoo = name.strip(), yahoo.strip().upper()
+    if not name:
+        raise ValueError("이름을 넣어 주세요")
+    if yahoo and not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-^=]{0,14}", yahoo):
+        raise ValueError(f"야후 티커 형식이 아닙니다: {yahoo}")
+    stock = {"name": name}
+    if name.isascii():
+        stock.update(google=f"{name} stock", lang="en")
+    if yahoo:
+        stock["yahoo"] = yahoo
+        if not list(yahoo_news(stock, 1)):
+            raise ValueError(f"야후에 {yahoo} 뉴스가 없습니다. 티커를 확인해 주세요")
+    return stock
+
+
+def add_stock(name, yahoo=""):
+    stocks = load_watchlist() if WATCHLIST.exists() else []
+    if any(s["name"].lower() == name.strip().lower() for s in stocks):
+        raise ValueError(f"이미 있습니다: {name.strip()}")
+    stock = new_stock(name, yahoo)
+    save_watchlist(stocks + [stock])
+    return stock
+
+
+def remove_stock(name):
+    stocks = load_watchlist()
+    left = [s for s in stocks if s["name"] != name]
+    if len(left) == len(stocks):
+        raise ValueError(f"목록에 없습니다: {name}")
+    save_watchlist(left)
 
 
 def load_seen():

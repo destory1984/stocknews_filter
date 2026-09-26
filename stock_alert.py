@@ -636,17 +636,55 @@ def make_handler(watcher: Watcher):
             # 다른 사이트가 몰래 보내지 못하게 사용자 정의 헤더를 요구한다 (브라우저가 막는다).
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path == "/watch" and self.headers.get("X-Watch") == "yes":
+                self.send_json(watch_change(watcher, q))
+                return
             if u.path != "/reset" or self.headers.get("X-Reset") != "yes" or q.get("what") not in ("feedback", "all"):
                 self.send_page("bad request", 400)
                 return
-            moved = reset_records(watcher, q["what"])
-            data = json.dumps({"moved": moved}, ensure_ascii=False).encode()
+            self.send_json({"moved": reset_records(watcher, q["what"])})
+
+        def send_json(self, obj):
+            data = json.dumps(obj, ensure_ascii=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
     return H
+
+
+def watch_change(watcher: Watcher, q: dict) -> dict:
+    """종목 추가·삭제 (페이지 맨 위 종목 줄). 추가하면 다음 차례에 바로 뉴스를 받는다."""
+    try:
+        if q.get("op") == "add":
+            s = stocknews.add_stock(q.get("name", ""), q.get("yahoo", ""))
+            watcher.last_fetch = 0
+            log(f"종목 추가: {s['name']}" + (f" ({s['yahoo']})" if s.get("yahoo") else ""))
+            return {"ok": True}
+        if q.get("op") == "remove":
+            stocknews.remove_stock(q.get("name", ""))
+            log(f"종목 삭제: {q.get('name')}  (받아 둔 뉴스와 판별 기록은 그대로 둔다)")
+            return {"ok": True}
+        return {"ok": False, "msg": "알 수 없는 요청"}
+    except (ValueError, SystemExit, OSError) as e:
+        return {"ok": False, "msg": str(e)}
+
+
+def watch_bar() -> str:
+    try:
+        stocks = stocknews.load_watchlist()
+    except (SystemExit, OSError, ValueError):
+        stocks = []
+    chips = "".join(
+        f"<span class=chip>{html.escape(s['name'])}"
+        + (f" <small>{html.escape(s['yahoo'])}</small>" if s.get("yahoo") else "")
+        + f"<a class=rm data-name=\"{html.escape(s['name'])}\" title='삭제'>×</a></span>"
+        for s in stocks)
+    return (f"<div class=watch>{chips or '<span class=why>종목이 없습니다</span>'}"
+            "<form id=add><input name=stock placeholder='이름 (삼성전자, Micron)' required>"
+            "<input name=yahoo placeholder='야후 티커 (선택: MU, 005930.KS)' size=26>"
+            "<button>추가</button> <span id=watchmsg class=why></span></form></div>")
 
 
 def reset_records(watcher: Watcher, what: str) -> list:
@@ -760,15 +798,38 @@ body{{font:14px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16p
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:12px}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:16px;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:13px;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:13px}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:11px}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:11px}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:11px}} .by{{font-size:12px;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.watch{{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}} .chip{{padding:3px 4px 3px 9px;border-radius:12px;background:#23382c;color:#9fd8b0;font-size:13px}} .chip small{{color:#7fae8d}} a.rm{{margin-left:4px;padding:0 5px;border-radius:8px;cursor:pointer;color:#7fae8d}} a.rm:hover{{background:#5a2a2a;color:#fff}} #add{{display:flex;gap:6px;align-items:center;margin-left:10px}} #add input{{background:#1f2227;border:1px solid #3a3e45;border-radius:6px;color:#e6e6e6;padding:4px 7px;font:13px system-ui}} #add button{{background:#2d4a37;border:1px solid #4d7a5c;border-radius:6px;color:#e6e6e6;padding:4px 12px;cursor:pointer}} #add button:disabled{{opacity:.5}}
 </style>
 <h2>종목 뉴스 알리미 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
-<p class=why>구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 (종목은 watchlist.json) · 마지막 수집 {watcher.fetch_note}</p>
+{watch_bar()}
+<p class=why>구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
   <a id=reset-all data-n="{n_fb}" data-j="{len(watcher.judged)}">반응과 판별 기록 모두 지우기 ({n_fb}건 · {len(watcher.judged)}건)</a>
   — 지운 기록은 같은 폴더에 .bak 파일로 남는다</p>
 <script>
+// 종목 추가·삭제. 삭제는 한 번 더 묻는다. 받아 둔 뉴스와 판별 기록은 지우지 않는다.
+async function watch(params) {{
+  const r = await fetch("/watch?" + new URLSearchParams(params), {{method: "POST", headers: {{"X-Watch": "yes"}}}});
+  return r.ok ? r.json() : {{ok: false, msg: "요청 실패 (" + r.status + ")"}};
+}}
+document.getElementById("add").onsubmit = async (e) => {{
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector("button"), msg = document.getElementById("watchmsg");
+  btn.disabled = true;
+  msg.textContent = f.yahoo.value.trim() ? "야후 티커 확인 중..." : "";
+  const d = await watch({{op: "add", name: f.stock.value, yahoo: f.yahoo.value}});
+  btn.disabled = false;
+  if (d.ok) location.reload(); else msg.textContent = d.msg;
+}};
+document.querySelectorAll("a.rm").forEach((a) => a.onclick = async () => {{
+  const name = a.dataset.name;
+  if (!confirm(name + " 을(를) 종목에서 뺄까요?\\n\\n이미 받아 둔 뉴스와 판별 기록은 그대로 남습니다.")) return;
+  const d = await watch({{op: "remove", name}});
+  if (d.ok) location.reload(); else alert(d.msg);
+}});
+
 // 처음부터 다시: 지우기 전에 반드시 한 번 더 묻는다
 async function resetRecords(what, msg) {{
   if (!confirm(msg + "\\n\\n정말 지우시겠습니까? (기록은 .bak 파일로 옮겨져 되살릴 수 있습니다)")) return;
