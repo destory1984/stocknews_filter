@@ -1,5 +1,5 @@
 """
-종목 뉴스 알림 (saveticker 필터링의 news_alert.py 를 가져와 뉴스 출처만 바꾼 것)
+종목 뉴스 알리미 (saveticker 필터링의 news_alert.py 를 가져와 뉴스 출처만 바꾼 것)
 
   fetch_min 분마다 watchlist.json 의 종목 뉴스를 구글 뉴스·야후 파이낸스 RSS 에서 받아
   data/stocknews_날짜.csv 에 쌓는다 (stocknews.py 의 키워드 거름망을 먼저 거친다).
@@ -464,7 +464,7 @@ def toast(cfg: dict, r: dict, score: int, reason: str):
         log("winotify 가 없어 토스트를 띄우지 못했다. pip install winotify")
         return
     fb = f"http://127.0.0.1:{cfg['port']}/fb?id={r['id']}"
-    n = Notification(app_id="종목 뉴스", title=f"[{score}점] {r.get('tickers', '')} · {reason}",
+    n = Notification(app_id="종목 뉴스 알리미", title=f"[{score}점] {r.get('tickers', '')} · {reason}",
                      msg=r["title"][:200], launch=r["url"])
     # 말로 읽을 때는 토스트 소리를 끈다. 말머리 소리와 겹치면 뉴스 알림인지 헷갈린다
     speaking = cfg["tts"] and not quiet_now(cfg)
@@ -754,14 +754,14 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
     note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
              f"👎·🔕0 준 뉴스와 {low}점 이하 뉴스 {hidden}건은 숨겼습니다. <a href='/?all=1' style='text-decoration:underline'>모두 보기</a></p>")
-    return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 필터링</title>
+    return f"""<!doctype html><meta charset=utf-8><title>종목 뉴스 알리미</title>
 <style>
 body{{font:14px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:12px}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:16px;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:13px;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:13px}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:11px}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:11px}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:11px}} .by{{font-size:12px;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 </style>
-<h2>종목 뉴스 필터링 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
+<h2>종목 뉴스 알리미 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
 <p class=why>구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 (종목은 watchlist.json) · 마지막 수집 {watcher.fetch_note}</p>
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
@@ -845,7 +845,7 @@ class Server(ThreadingHTTPServer):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="종목 뉴스 알림")
+    ap = argparse.ArgumentParser(description="종목 뉴스 알리미")
     ap.add_argument("--test", type=int, metavar="N", help="최근 N건만 판별해 출력하고 끝낸다")
     ap.add_argument("--before", metavar="TIME", help="--test 에서 이 한국 시각까지의 뉴스만 (예: '2026-09-24 23:50')")
     ap.add_argument("--say", metavar="TEXT", help="음성 알림을 한 번 내 보고 끝낸다")

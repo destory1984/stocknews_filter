@@ -1,4 +1,4 @@
-# stocknews_filter
+# stocknews_filter (종목 뉴스 알리미)
 
 내가 고른 종목의 뉴스를 구글 뉴스와 야후 파이낸스에서 모아, LLM 이 알릴 만한 것만 골라 윈도우 알림과 음성으로 알려준다.
 화면·음성·알림·판별 방식은 [saveticker_filter](https://github.com/destory1984/saveticker_filter) 와 같다. 다른 점은 뉴스를 받아 오는 곳뿐이다.
