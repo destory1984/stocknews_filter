@@ -1741,8 +1741,11 @@ def week_page(watcher: Watcher) -> str:
         pr = st["price"]
         move = (f"<b style='color:{'#e06c6c' if pr[2] > 0 else '#6c9be0'}'>{pr[2]:+.1f}%</b> "
                 f"<span class=why>{pr[0]:.2f} → {pr[1]:.2f}</span>") if pr else "<span class=why>값 없음</span>"
-        top = "".join(f"<li>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
-                      f"{html.escape(x.get('title_ko') or x['title'])}</a></li>" for x in st["top"])
+        top = "".join(f"<li{' class=unsure' if x.get('unsure') else ''}>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
+                      f"{html.escape(x.get('title_ko') or x['title'])}</a>"
+                      + (" <small title='들어왔을 때 이미 2시간 넘게 지난 뉴스라 원문 날짜를 확인하지 않았다. "
+                         "구글이 옛 기사에 새 날짜를 붙인 것일 수 있다'>날짜 확인 안 됨</small>" if x.get("unsure") else "")
+                      + "</li>" for x in st["top"])
         cards.append(f"<div class=card><div><b>{html.escape(st['name'])}</b> <span class=why>{html.escape(st['ticker'])}</span> · {move}</div>"
                      f"<div class=why>뉴스 {st['news']}건 · 알림 {st['alerts']}건</div>"
                      + (f"<ul>{top}</ul>" if top else "") + "</div>")
@@ -1752,7 +1755,7 @@ def week_page(watcher: Watcher) -> str:
 body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:980px}}
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
 h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
-.card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .back{{color:#8ab4f8}}
+.card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .card li.unsure{{opacity:.6}} .card li small{{color:#e0a44a}} .back{{color:#8ab4f8}}
 </style>
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>주간 리포트</h2>

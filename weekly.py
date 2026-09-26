@@ -47,7 +47,15 @@ def build(recs: list, stocks: list, feedback: dict, threshold: int) -> dict:
     prices = week_change([s.get("yahoo", "") for s in stocks])
     for s in stocks:
         mine = [r for r in recs if s["name"] in (r.get("tickers") or "") and r.get("by") != "rule"]
-        top = sorted(mine, key=lambda r: (r["score"], r.get("created_at", "")), reverse=True)[:3]
+        # 점수 높은 셋은 알림을 보냈거나 제때(2시간 안) 들어온 뉴스에서 먼저 고른다. 구글은 옛 기사에 새 날짜를
+        # 붙여 다시 올리는데 (7월 기사가 09-25 날짜로 옴), 원문 날짜는 알림 후보만 확인하니 늦게 들어온 것은
+        # 확인이 안 돼 있다. 모자라면 늦게 들어온 것으로 채우고 unsure 로 표시한다.
+        # 3점 이하(목록에서 숨기는 점수)는 늦게 들어온 것보다도 뒤로 (1점 시세 페이지가 8점 뉴스를 밀어내지 않게)
+        ok = lambda r: bool(r.get("alerted")) or not r.get("late")
+        tier = lambda r: 0 if ok(r) and r["score"] > 3 else 1 if r["score"] > 3 else 2
+        fresh = [r for r in mine if not r.get("stale")]
+        top = sorted(fresh, key=lambda r: (-tier(r), r["score"], r.get("created_at", "")), reverse=True)[:3]
+        top = [r if ok(r) else dict(r, unsure=True) for r in top]
         by_stock.append({"name": s["name"], "ticker": s.get("yahoo", ""), "news": len(mine),
                          "alerts": sum(1 for r in mine if r.get("alerted")),
                          "price": prices.get(s.get("yahoo", "")), "top": top})
