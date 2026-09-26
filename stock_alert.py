@@ -1162,6 +1162,54 @@ def fetch_now(watcher: Watcher, body: dict) -> dict:
     return {"ok": True, "new": n}
 
 
+KEYWORD_PROMPT = """종목 뉴스 필터에 넣을 종목 설정을 제안하라.
+종목 이름: {name}
+야후 티커: {yahoo}
+
+- google: 구글 뉴스 검색어. 미국 종목이면 영어로 "회사 이름 stock", 한국 종목이면 한국어 회사 이름.
+- lang: 미국 종목 "en", 한국 종목 "ko".
+- keywords: 기사 제목이나 요약에 이 가운데 하나라도 있어야 뉴스를 남긴다. 회사 이름의 흔한 표기
+  (영어 이름, 짧은 이름, 한국어 이름), 그리고 티커. 3~6개.
+  영어는 낱말 단위로, 대소문자를 가리지 않고 맞춘다. 그러니 흔한 영어 낱말과 같은 짧은 티커는 넣지 마라
+  (예: BE 는 "be", MU 는 "mu", ON 은 "on" 과 겹친다). ETF 는 티커와 ETF 이름을 넣어라.
+- exclude: 이 말이 들어가면 뉴스를 버린다. 이름이 비슷한 다른 회사·상품·우선주처럼 헷갈리는 것만. 없으면 [].
+JSON 만 출력하라: {{"google": "...", "lang": "en", "keywords": ["..."], "exclude": []}}
+"""
+
+
+def suggest_keywords(watcher: Watcher, body: dict) -> dict:
+    """설정 창 '제안받기': 판별 LLM 에게 검색어·키워드·뺄 말을 물어 돌려준다. 저장은 전하가 살펴본 뒤에."""
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "msg": "이름이 없다"}
+    prompt = KEYWORD_PROMPT.format(name=name, yahoo=str(body.get("yahoo") or "").strip() or "(없음)")
+    cfg, text = watcher.cfg, ""
+    if cfg["backend"] in ("auto", "ollama"):
+        try:
+            text = ask_ollama(cfg, prompt, cfg["ollama_timeout_sec"])
+        except Exception as e:
+            if cfg["backend"] == "ollama":
+                return {"ok": False, "msg": f"Ollama 실패 ({type(e).__name__})"}
+    by = "ollama" if text else "claude"
+    if not text:
+        try:
+            text = ask_claude(cfg, prompt)
+        except Exception as e:
+            return {"ok": False, "msg": f"Claude 실패 ({type(e).__name__})"}
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        got = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        got = {}
+    words = lambda k: [str(w).strip() for w in (got.get(k) or []) if str(w).strip()][:8]
+    if not got:
+        return {"ok": False, "msg": "모델 답을 읽지 못했다"}
+    log(f"키워드 제안 ({by}) {name}: {got}")
+    return {"ok": True, "by": by, "google": str(got.get("google") or "").strip(),
+            "lang": "en" if got.get("lang") == "en" else "ko",
+            "keywords": words("keywords"), "exclude": words("exclude")}
+
+
 def hide_source(watcher: Watcher, body: dict) -> dict:
     """언론사 성적표의 가리기/되살리기. 목록에서만 가린다 (판별·알림은 그대로)."""
     src = str(body.get("source") or "").strip()
@@ -1205,7 +1253,7 @@ def mb_rows(watcher: Watcher, body: dict) -> dict:
 
 SETTING_ROUTES = {"/settings": set_setting, "/say": say_test, "/telegram-test": telegram_test,
                   "/fetch": fetch_now, "/watch": watch_change, "/mb": mb_rows,
-                  "/hide-source": hide_source,
+                  "/hide-source": hide_source, "/suggest-keywords": suggest_keywords,
                   "/summarize-one": lambda w, body: w.summarizer.summarize_now(str(body.get("id") or ""))}
 
 

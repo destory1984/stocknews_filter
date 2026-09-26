@@ -152,7 +152,8 @@ def stocks_html(stocks: list) -> str:
             f"<label>꼭 들어갈 말 <input name=keywords value=\"{j('keywords')}\" placeholder='비우면 이름·티커'></label>"
             f"<label>뺄 말 <input name=exclude value=\"{j('exclude')}\" placeholder='쉼표로 여럿'></label>"
             f"<label>뺄 언론사 <input name=exclude_sources value=\"{j('exclude_sources')}\" placeholder='예: MarketBeat'></label>"
-            f"<div class=mbtns><button type=button class='hbtn ssave'>저장</button></div></div></div>")
+            f"<div class=mbtns><button type=button class='hbtn ssug' title='판별 LLM 에게 검색어·키워드·뺄 말을 물어 칸에 채운다. 저장은 따로 누른다'>제안받기</button>"
+            f"<button type=button class='hbtn ssave'>저장</button></div></div></div>")
     return "".join(chips) or "<div class=mrow><small class=sub>종목이 없다</small></div>"
 
 
@@ -382,6 +383,21 @@ $("#stocksec").addEventListener("click", async (ev) => {
     const d = await post("/watch", {op: "remove", name});
     say("#stockmsg", d, "뺐다 · " + name);
     if (d.ok) reloadStocks();
+  } else if (ev.target.closest(".ssug")) {
+    const b = ev.target.closest(".ssug"), ed = box.querySelector(".sedit");
+    b.disabled = true;
+    b.textContent = "묻는 중…";
+    const d = await post("/suggest-keywords", {name: ed.querySelector("[name=name]").value,
+                                              yahoo: ed.querySelector("[name=yahoo]").value});
+    b.disabled = false;
+    b.textContent = "제안받기";
+    if (d.ok) {
+      if (d.google) ed.querySelector("[name=google]").value = d.google;
+      ed.querySelector("[name=lang]").value = d.lang;
+      ed.querySelector("[name=keywords]").value = d.keywords.join(", ");
+      ed.querySelector("[name=exclude]").value = d.exclude.join(", ");
+    }
+    say("#stockmsg", d, "제안을 칸에 채웠다 (" + d.by + ") · 살펴보고 저장을 누르세요");
   } else if (ev.target.closest(".ssave")) {
     const fields = {};
     box.querySelectorAll(".sedit input, .sedit select").forEach(el => fields[el.name] = el.value);
