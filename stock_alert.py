@@ -686,7 +686,9 @@ class Summarizer:
             for rec in todo[:20]:
                 if not self.cfg.get("summarize"):
                     break
-                if rec.get("feed") == "google" and rec["id"] not in self.dated:
+                # 날짜를 이미 DB 에 적어 둔 기사는 다시 켠 뒤에도 또 묻지 않는다. Ollama 가 꺼져 있으면 본문이
+                # 필요 없으니 그냥 넘어가고, 켜져 있으면 one() 이 그때 한 번 받는다 (09-26 밤 재시작마다 되물은 3건)
+                if rec.get("feed") == "google" and rec["id"] not in self.dated and not rec.get("published_real"):
                     if not self.check_date(rec):   # 구글이 막는 중
                         break
                     if self.w.judged.get(rec["id"], rec).get("summary_state"):   # 옛 기사·본문 없음
