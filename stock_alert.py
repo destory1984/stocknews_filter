@@ -124,6 +124,7 @@ PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
 - 4~6: 간접적으로만 관련
 - 0~3: 관련 없음, 이미 나온 내용의 반복, 사소한 소식
 [과거 반응]에서 👍 받은 뉴스와 비슷하면 점수를 올리고, 👎 받은 뉴스와 비슷하면 내려라.
+reason 과 con 은 점수와 상관없이 둘 다 쓴다. 점수가 높으면 reason 이 앞서고 낮으면 con 이 앞선다. 정말 없으면 빈 문자열.
 [과거 반응]의 🔔 는 "이런 뉴스는 반드시 알려라", 🔕 는 "이런 뉴스는 절대 알리지 마라"는 강한 표시다.
 🔔 와 같은 종류의 뉴스는 9~10점, 🔕 와 같은 종류는 0~1점을 줘라. 이것이 👍/👎 와 관심사보다 우선한다.
 
@@ -145,7 +146,7 @@ PROMPT = """너는 한 개인 투자자의 뉴스 비서다.
 {news}
 
 JSON 만 출력하라. 다른 말은 쓰지 마라.
-{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "왜 관심 있을지 15자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부", "ko": "제목이 영어면 자연스러운 한국어 제목으로 번역, 한국어 제목이면 빈 문자열", "sum": "[설명] 이 있으면 그 내용을 한국어 1~2문장으로 요약, 없으면 빈 문자열"}}]}}
+{{"results": [{{"i": 번호, "score": 0~10 정수, "reason": "이 사람이 이 뉴스를 볼 까닭 12자 이내 한국어", "con": "이 사람이 이 뉴스를 안 볼 까닭 12자 이내 한국어", "topic": "사건 이름", "say": "제목을 소리내 읽기 좋게 12자 안팎으로 줄인 말. 예: 이란 휴전안 거부", "ko": "제목이 영어면 자연스러운 한국어 제목으로 번역, 한국어 제목이면 빈 문자열", "sum": "[설명] 이 있으면 그 내용을 한국어 1~2문장으로 요약, 없으면 빈 문자열"}}]}}
 """
 
 
@@ -326,7 +327,7 @@ def ask_ollama(cfg: dict, prompt: str, timeout: float) -> str:
 
 
 def parse_results(text: str, batch: list) -> dict:
-    """{id: (score, reason, topic, say, ko, sum)}. 모델이 빠뜨린 뉴스는 결과에 없다.
+    """{id: (score, reason, topic, say, ko, sum, con)}. reason 은 볼 까닭, con 은 안 볼 까닭. 모델이 빠뜨린 뉴스는 결과에 없다.
     ko 는 영어 제목의 번역, sum 은 RSS 설명(야후)의 한국어 요약."""
     try:
         items = json.loads(text).get("results", [])
@@ -346,12 +347,13 @@ def parse_results(text: str, batch: list) -> dict:
             out[batch[i - 1]["id"]] = (max(0, min(10, score)), str(it.get("reason", "")).strip(),
                                        str(it.get("topic", "")).strip(), str(it.get("say", "")).strip(),
                                        str(it.get("ko", "") or "").strip() if is_english(batch[i - 1]["title"]) else "",
-                                       str(it.get("sum", "") or "").strip() if batch[i - 1].get("summary") else "")
+                                       str(it.get("sum", "") or "").strip() if batch[i - 1].get("summary") else "",
+                                       str(it.get("con", "") or "").strip())
     return out
 
 
 def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
-    """({id: (score, reason, topic, say, ko, sum)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
+    """({id: (score, reason, topic, say, ko, sum, con)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
     prompt = PROMPT.format(
         interests=INTERESTS.read_text(encoding="utf-8") if INTERESTS.exists() else "(없음)",
         examples=examples_text(cfg["examples"]),
@@ -1127,7 +1129,7 @@ class Watcher:
             for r in batch:
                 if r["id"] not in result:
                     continue
-                score, reason, topic, say, ko, summ = result[r["id"]]
+                score, reason, topic, say, ko, summ, con = result[r["id"]]
                 if ko:
                     r["title_ko"] = ko   # 토스트·텔레그램이 번역 제목을 쓴다
                 # 같은 사건(시진핑 발언 문장마다 뜨는 속보, 실적 예고 기사 여럿 등)은 topic_hours 에 한 번만 알린다
@@ -1148,7 +1150,7 @@ class Watcher:
                         log(f"옛 기사라 알리지 않음 (원문 {pub:%Y-%m-%d}) {ko or r['title']}"[:90])
                 rec = {"id": r["id"], "title": r["title"], "url": r["url"], "source": r.get("source", ""),
                        "tickers": r.get("tickers", ""),
-                       "created_at": r["created_at"], "score": score, "reason": reason, "topic": topic,
+                       "created_at": r["created_at"], "score": score, "reason": reason, "con": con, "topic": topic,
                        "say": say, "title_ko": ko, "alerted": alert, "late": late, "by": by,
                        "at": datetime.now(KST).isoformat(timespec="seconds")}
                 if summ:   # 야후 설명을 판별 때 줄인 것. 구글 기사는 요약 스레드가 나중에 채운다
@@ -1157,7 +1159,7 @@ class Watcher:
                 self.judged[r["id"]] = rec
                 store.save_judged(rec)
                 mark = "🔔" if alert else "⏰" if late and score >= self.cfg["threshold"] else "  "
-                log(f"{mark} {score:>2} [{topic}] {r['title'][:70]}  — {reason}")
+                log(f"{mark} {score:>2} [{topic}] {r['title'][:70]}  — ＋{reason} －{con}")
                 if alert:
                     self.recent_alerts.append((time.time(), r["title"]))
                     toast(self.cfg, r, score, reason)
@@ -1696,6 +1698,14 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
     return page_html(watcher, rows, note, show_all, low, hidden, sum(1 for v in fb.values() if v), stock, counts)
 
 
+def reasons_html(r: dict) -> str:
+    """볼 까닭(＋, 초록)과 안 볼 까닭(－, 빨강). 09-27 전 기록은 점수를 준 까닭 하나(reason)뿐이라 그대로 보인다."""
+    if not r.get("con"):
+        return html.escape(r.get("reason", ""))
+    pro = f"<span class=pro>＋ {html.escape(r['reason'])}</span> " if r.get("reason") else ""
+    return pro + f"<span class=con>－ {html.escape(r['con'])}</span>"
+
+
 def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "") -> str:
     t = parse_ts(r.get("created_at", ""))
     when = t.astimezone(KST).strftime("%m-%d %H:%M") if t else ""
@@ -1736,7 +1746,7 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         f"{html.escape(r.get('title_ko') or r['title'])}</a>"
         # 요약은 접어 둔다. '요약 ▾' 을 누르면 편다
         + (f"<div class=sum data-id='{r['id']}'>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
-        + f"<div class=why>{src}{topic}{html.escape(r.get('reason', ''))}"
+        + f"<div class=why>{src}{topic}{reasons_html(r)}"
         + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else
            f" <a class=sumget data-id='{r['id']}' title='원문을 받아 Ollama 로 요약한다 (구글에 한 번 묻는다)'>요약 받기</a>"
            if "news.google.com" in r.get("url", "") and not r.get("summary_state") else "")
@@ -1902,7 +1912,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
-#recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} #upd:empty{{display:none}}
+#recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} .pro{{color:#8fc79a}} .con{{color:#d9918f;margin-left:4px}} #upd:empty{{display:none}}
 #recent .ra{{margin:2px 0}} #recent a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
@@ -2086,9 +2096,9 @@ def main():
             res, by = judge(cfg, batch, topics)
             log(f"{len(batch)}건 판별 {time.time() - t0:.1f}초 ({by})")
             for r in batch:
-                score, reason, topic, say, ko, summ = res.get(r["id"], (None, "(응답 없음)", "", "", "", ""))
+                score, reason, topic, say, ko, summ, con = res.get(r["id"], (None, "(응답 없음)", "", "", "", "", ""))
                 mark = "🔔" if score is not None and score >= cfg["threshold"] else "  "
-                print(f"{mark} {score if score is not None else '-':>2} [{topic}] {r['title'][:70]}  — {reason}  🗣 {say}")
+                print(f"{mark} {score if score is not None else '-':>2} [{topic}] {r['title'][:70]}  — ＋{reason} －{con}  🗣 {say}")
                 if topic and topic not in topics:
                     topics.insert(0, topic)
         return

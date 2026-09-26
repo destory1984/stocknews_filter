@@ -23,7 +23,7 @@ DB = BASE / "data" / "stocknews.db"
 NEWS_COLS = ["id", "created_at", "found_at", "tickers", "feed", "source", "title", "url", "rss_summary"]
 JUDGED_COLS = ["id", "title", "url", "source", "tickers", "created_at", "score", "reason", "topic", "say",
                "title_ko", "summary_ko", "summary_by", "summary_state", "alerted", "late", "by", "at",
-               "published_real", "stale"]
+               "published_real", "stale", "con"]
 BOOL_COLS = {"alerted", "late", "stale"}
 
 SCHEMA = """
@@ -40,7 +40,8 @@ create table if not exists judged (
     summary_state text,       -- null 요약 전, done, skip:<까닭>
     alerted int, late int, by text, at text,
     published_real text,      -- 원문 페이지에 적힌 처음 나온 시각 (구글 기사만, 확인한 것만)
-    stale int);               -- 원문 날짜가 오래된 옛 기사 (구글이 새 날짜를 붙여 다시 올린 것)
+    stale int,                -- 원문 날짜가 오래된 옛 기사 (구글이 새 날짜를 붙여 다시 올린 것)
+    con text);                -- 안 볼 까닭 (reason 은 볼 까닭). 09-27 전에는 reason 하나에 점수를 준 까닭을 적었다
 create index if not exists judged_at on judged(at);
 create table if not exists feedback (
     n integer primary key autoincrement, id text, title text, "like" int, strong int, at text);
@@ -70,7 +71,7 @@ def con() -> sqlite3.Connection:
         c.executescript(SCHEMA)
         # 먼저 만든 DB 에는 없는 칸을 더한다
         have = {r[1] for r in c.execute("pragma table_info(judged)")}
-        for col, typ in (("published_real", "text"), ("stale", "int")):
+        for col, typ in (("published_real", "text"), ("stale", "int"), ("con", "text")):
             if col not in have:
                 c.execute(f"alter table judged add column {col} {typ}")
         c.commit()
