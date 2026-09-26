@@ -43,6 +43,7 @@ import requests
 
 import article
 import earnings
+import moves
 import settings
 import stocknews
 import store
@@ -76,6 +77,12 @@ DEFAULTS = {
     "port": 18766,                 # 18765 는 saveticker 필터링
     "examples": 15,                # 프롬프트에 넣을 👍, 👎 각각의 최대 개수
     "dup_ratio": 0.6,              # 최근 알린 제목과 이만큼 비슷하면 알리지 않는다
+    # 급등락: 15분 사이 이만큼(%) 움직이면 알린다. 3배 ETF 는 따로. 같은 종목은 move_cooldown_min 에 한 번
+    "move_alerts": True,
+    "move_pct": 3.0,
+    "move_pct_3x": 5.0,
+    "move_3x": ["SOXL", "KORU"],
+    "move_cooldown_min": 60,
     "hide_sources": [],            # 판별 목록에서 가릴 언론사 (언론사 성적표에서 고른다). 판별·알림은 그대로 한다
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
     "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
@@ -830,6 +837,9 @@ class Watcher:
         self.summarizer = Summarizer(self)
         self.ver = 1              # 목록 판 번호. 알림이 나갈 때 오른다 (mark_shown 참고)
         self.last_earn = 0.0      # 실적일을 마지막으로 살핀 시각. 받는 것은 하루 한 번 (earnings.refresh)
+        self.last_moves = 0.0     # 급등락을 마지막으로 살핀 시각 (5분마다)
+        self.move_seen = {}       # 티커 → 마지막으로 알린 시각 (같은 종목은 move_cooldown_min 에 한 번)
+        self.moves = []           # 최근 급등락 [{at, ticker, name, change, price, news}] 새것부터, 10개까지
         self.fetch_note = "아직 받지 않음"
 
     def fetch(self):
@@ -922,7 +932,65 @@ class Watcher:
                 log(f"실적일 받기 실패: {type(e).__name__}: {str(e)[:100]}")
         threading.Thread(target=job, daemon=True).start()
 
+    def check_moves(self):
+        """5분마다 뒤에서 15분 변동을 본다. 기준을 넘으면 화면·토스트·음성(·텔레그램)."""
+        if not self.cfg.get("move_alerts") or time.time() - self.last_moves < 300:
+            return
+        self.last_moves = time.time()
+        stocks = [s for s in load_stocks() if s.get("yahoo")]
+        names = {s["yahoo"]: s["name"] for s in stocks}
+        big = {t.upper() for t in self.cfg.get("move_3x") or []}
+        pct_for = lambda t: float(self.cfg["move_pct_3x"] if t.upper() in big else self.cfg["move_pct"])
+
+        def job():
+            try:
+                hits = moves.check(list(names), pct_for)
+            except Exception as e:
+                log(f"급등락 확인 실패: {type(e).__name__}: {str(e)[:100]}")
+                return
+            for t, change, cur, before in hits:
+                if time.time() - self.move_seen.get(t, 0) < self.cfg["move_cooldown_min"] * 60:
+                    continue
+                self.move_seen[t] = time.time()
+                self.move_alert(t, names.get(t, t), change, cur)
+        threading.Thread(target=job, daemon=True).start()
+
+    def related_news(self, name: str, hours: float = 2, n: int = 3) -> list:
+        """그 종목의 최근 뉴스 가운데 점수 높은 것 몇 개 (원인일 만한 것)."""
+        recs = [r for r in self.recent(hours) if name in (r.get("tickers") or "") and r.get("by") != "rule"]
+        return sorted(recs, key=lambda r: (r["score"], r.get("created_at", "")), reverse=True)[:n]
+
+    def move_alert(self, ticker: str, name: str, change: float, price: float):
+        word = "상승" if change > 0 else "하락"
+        news = self.related_news(name)
+        item = {"at": datetime.now(KST).isoformat(timespec="seconds"), "ticker": ticker, "name": name,
+                "change": change, "price": price,
+                "news": [{"title": r.get("title_ko") or r["title"], "url": r["url"], "score": r["score"]}
+                         for r in news]}
+        self.moves = ([item] + self.moves)[:10]
+        log(f"📈 급등락 {ticker} 15분 {change:+.1f}% ({price:.2f}) · 뉴스 {len(news)}건"
+            + "".join(f"\n     {x['score']:>2} {x['title'][:70]}" for x in item["news"]))
+        self.ver += 1   # 목록이 곧바로 다시 그려지고, 음성은 그 뒤에
+        head = f"{name} ({ticker}) 15분 {change:+.1f}%"
+        body = item["news"][0]["title"] if news else "최근 2시간 안에 이 종목 뉴스가 없다"
+        if self.cfg.get("toast", True):
+            try:
+                from winotify import Notification, audio
+                n = Notification(app_id="종목 뉴스 필터", title=f"급등락 · {head}", msg=body[:200],
+                                 launch=item["news"][0]["url"] if news else f"http://127.0.0.1:{self.cfg['port']}/")
+                n.set_audio(audio.Silent if self.cfg["tts"] and not quiet_now(self.cfg) else audio.Default, loop=False)
+                n.show()
+            except Exception as e:
+                log(f"급등락 토스트 실패: {type(e).__name__}")
+        if self.cfg.get("telegram"):
+            text = (f"<b>급등락 · {html.escape(head)}</b>\n" + "\n".join(
+                f"[{x['score']}점] <a href=\"{html.escape(x['url'])}\">{html.escape(x['title'])}</a>"
+                for x in item["news"]))
+            threading.Thread(target=lambda: tg_send(text, silent=quiet_now(self.cfg)), daemon=True).start()
+        say_alert(self.cfg, f"{name}, 15분 새 {abs(change):.1f}% {word}", self.ver)
+
     def step(self):
+        self.check_moves()
         self.check_earnings()
         self.fetch()
         self.summarizer.poke()
@@ -1466,6 +1534,24 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         + f"{group}</div></td></tr>")
 
 
+def moves_html(watcher: Watcher) -> str:
+    """목록 위 급등락 칸: 최근 6시간 것만, 새것부터. 원인일 만한 뉴스를 밑에 붙인다."""
+    cutoff = datetime.now(KST) - timedelta(hours=6)
+    items = [m for m in watcher.moves if datetime.fromisoformat(m["at"]) >= cutoff]
+    if not items:
+        return "<div id=moves></div>"
+    rows = []
+    for m in items:
+        at = datetime.fromisoformat(m["at"])
+        color = "#e06c6c" if m["change"] > 0 else "#6c9be0"   # 한국식: 오르면 빨강, 내리면 파랑
+        news = "".join(f"<div class=mvn>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
+                       f"{html.escape(x['title'])}</a></div>" for x in m["news"]) or \
+            "<div class=mvn>최근 2시간 안에 이 종목 뉴스가 없다</div>"
+        rows.append(f"<div class=mv><b style='color:{color}'>{html.escape(m['ticker'])} 15분 {m['change']:+.1f}%</b> "
+                    f"<span class=why>{at:%H:%M} · {m['price']:.2f} · {html.escape(m['name'])}</span>{news}</div>")
+    return "<div id=moves><div class=why>급등락 (최근 6시간)</div>" + "".join(rows) + "</div>"
+
+
 def earnings_line() -> str:
     """목록 위 한 줄: 60일 안의 실적 발표 (한 번의 실적 시즌), 한국 시각. 사흘 안이면 주황."""
     items = earnings.upcoming(60)
@@ -1505,7 +1591,8 @@ body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margi
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
-.old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
+.old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
+#moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
@@ -1515,6 +1602,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 {menu}
 <p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {earnings_line()}
+{moves_html(watcher)}
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
@@ -1546,6 +1634,8 @@ async function refresh() {{
     const r = await fetch("/?" + params, {{cache: "no-store"}});
     const doc = new DOMParser().parseFromString(await r.text(), "text/html");
     document.getElementById("list").innerHTML = doc.getElementById("list").innerHTML;
+    const mv = doc.getElementById("moves");
+    if (mv) document.getElementById("moves").innerHTML = mv.innerHTML;
     applyOpen();
     document.getElementById("upd").textContent = "자동 갱신 " + new Date().toLocaleTimeString("ko-KR", {{hour12: false}});
   }} catch (e) {{
