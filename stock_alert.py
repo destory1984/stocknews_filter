@@ -42,6 +42,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 import article
+import earnings
 import settings
 import stocknews
 import store
@@ -805,6 +806,7 @@ class Watcher:
         self.last_fetch = 0.0     # 마지막으로 RSS 를 받은 시각 (time.time)
         self.summarizer = Summarizer(self)
         self.ver = 1              # 목록 판 번호. 알림이 나갈 때 오른다 (mark_shown 참고)
+        self.last_earn = 0.0      # 실적일을 마지막으로 살핀 시각. 받는 것은 하루 한 번 (earnings.refresh)
         self.fetch_note = "아직 받지 않음"
 
     def fetch(self):
@@ -879,7 +881,24 @@ class Watcher:
         """알리기엔 늦은 뉴스인가. PC 가 잠든 사이 나온 뉴스를 깨어나서 한꺼번에 울리지 않게."""
         return r["ts"] < datetime.now(timezone.utc) - timedelta(minutes=self.cfg["max_age_min"])
 
+    def check_earnings(self):
+        """10분마다 실적일이 오늘 받은 것인지 본다. 날이 바뀌었거나 종목이 바뀌었으면 뒤에서 새로 받는다."""
+        if time.time() - self.last_earn < 600:
+            return
+        self.last_earn = time.time()
+
+        def job():
+            try:
+                before = earnings.cached()
+                got = earnings.refresh([s.get("yahoo", "") for s in load_stocks()])
+                if got != before:
+                    log(f"실적일 {len(got)}종목: " + ", ".join(f"{t} {d[5:]}" for t, d in sorted(got.items(), key=lambda x: x[1])))
+            except Exception as e:
+                log(f"실적일 받기 실패: {type(e).__name__}: {str(e)[:100]}")
+        threading.Thread(target=job, daemon=True).start()
+
     def step(self):
+        self.check_earnings()
         self.fetch()
         self.summarizer.poke()
         todo = self.pending()
@@ -1374,6 +1393,17 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         + f"{group}</div></td></tr>")
 
 
+def earnings_line() -> str:
+    """목록 위 한 줄: 60일 안의 실적 발표 (한 번의 실적 시즌). 사흘 안이면 주황."""
+    items = earnings.upcoming(60)
+    if not items:
+        return ""
+    parts = [f"<span{' class=warn' if left <= 3 else ''}>{html.escape(t)} {day:%m-%d} "
+             f"{'오늘' if left == 0 else f'D-{left}'}</span>" for t, day, left in items]
+    return ("<p class=why id=earn title='야후가 주는 미국 날짜. 장 마감 뒤 발표면 한국은 다음 날 아침'>"
+            "실적 발표: " + " · ".join(parts) + "</p>")
+
+
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:
     note += "<p class=why>🔔10 👍 👎 🔕0 가운데 누른 것에 불이 켜집니다. 🔔10 은 '반드시 알려라', 🔕0 은 '절대 알리지 마라'로 👍/👎 보다 강하게 반영됩니다. 같은 버튼을 다시 누르면 취소됩니다. "
     note += ("<a href='/' style='text-decoration:underline'>숨기기</a></p>" if show_all else
@@ -1397,6 +1427,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 </header>
 {menu}
 <p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+{earnings_line()}
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·
   <a id=reset-feedback data-n="{n_fb}">반응 기록 지우기 ({n_fb}건)</a> ·
