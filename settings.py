@@ -125,7 +125,8 @@ TRASH = ("<svg width=14 height=14 viewBox='0 0 24 24' fill=none stroke=currentCo
 def stocks_html(stocks: list) -> str:
     """종목 칸: 이름 칩(누르면 자세히 고치기) + 휴지통, 추가 입력."""
     chips = []
-    for s in stocks:
+    # 티커 순으로 보인다 (yahoo 티커가 없으면 이름으로). watchlist.json 의 순서는 그대로 둔다
+    for s in sorted(stocks, key=lambda s: (s.get("yahoo") or s["name"]).upper()):
         j = lambda k: e(", ".join(s.get(k, [])))
         chips.append(
             f"<div class=stock data-name=\"{e(s['name'])}\">"
