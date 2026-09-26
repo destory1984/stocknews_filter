@@ -223,9 +223,11 @@ header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .menu .qtimes{justify-content:flex-end;gap:6px;color:var(--muted)} .menu .qtimes input:disabled{opacity:.5}
 .menu .addrow input{flex:1;min-width:0}
 .menu #saytext{flex:1;min-width:0}
-.menu .stock{padding:0 8px}
+.menu #stocksec{display:grid;grid-template-columns:1fr 1fr}
+.menu .stock{padding:0 8px;min-width:0}
+.menu .stock:has(.sedit:not([hidden])){grid-column:1/-1}
 .menu .srow{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--sel)}
-.menu .sname{flex:1}
+.menu .sname{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .menu .sname{font:inherit;font-weight:600;border:0;background:none;color:var(--text);cursor:pointer;padding:4px 0;text-align:left}
 .menu .sname small{font-weight:400;color:var(--muted)} .menu .sname:hover,.menu .sname[aria-expanded="true"]{color:var(--down)}
 .menu .sdel{font:inherit;border:0;background:none;color:var(--muted);cursor:pointer;border-radius:4px;padding:3px 5px;display:inline-flex;align-items:center}
