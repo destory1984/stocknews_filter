@@ -892,7 +892,9 @@ class Watcher:
                 before = earnings.cached()
                 got = earnings.refresh([s.get("yahoo", "") for s in load_stocks()])
                 if got != before:
-                    log(f"실적일 {len(got)}종목: " + ", ".join(f"{t} {d[5:]}" for t, d in sorted(got.items(), key=lambda x: x[1])))
+                    log(f"실적 발표 {len(got)}종목: " + ", ".join(
+                        f"{t} {v['at'][5:16].replace('T', ' ')} {v.get('session', '')}".rstrip()
+                        for t, v in sorted(got.items(), key=lambda x: x[1]["at"])))
             except Exception as e:
                 log(f"실적일 받기 실패: {type(e).__name__}: {str(e)[:100]}")
         threading.Thread(target=job, daemon=True).start()
@@ -1394,14 +1396,18 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
 
 
 def earnings_line() -> str:
-    """목록 위 한 줄: 60일 안의 실적 발표 (한 번의 실적 시즌). 사흘 안이면 주황."""
+    """목록 위 한 줄: 60일 안의 실적 발표 (한 번의 실적 시즌), 한국 시각. 사흘 안이면 주황."""
     items = earnings.upcoming(60)
     if not items:
         return ""
-    parts = [f"<span{' class=warn' if left <= 3 else ''}>{html.escape(t)} {day:%m-%d} "
-             f"{'오늘' if left == 0 else f'D-{left}'}</span>" for t, day, left in items]
-    return ("<p class=why id=earn title='야후가 주는 미국 날짜. 장 마감 뒤 발표면 한국은 다음 날 아침'>"
-            "실적 발표: " + " · ".join(parts) + "</p>")
+    parts = []
+    for t, at, left, item in items:
+        tip = ("야후 시각 (정각이면 대개 어림값)" + (" · 나스닥 달력에서도 확인" if item.get("checked") else ""))
+        parts.append(
+            f"<span{' class=warn' if left <= 3 else ''} title='{tip}'>{html.escape(t)} "
+            f"{at:%m-%d}({'월화수목금토일'[at.weekday()]}) {at:%H:%M}{'께' if item.get('approx') else ''}"
+            f"{' ' + item['session'] if item.get('session') else ''} {'오늘' if left == 0 else f'D-{left}'}</span>")
+    return "<p class=why id=earn>실적 발표 (한국 시각): " + " · ".join(parts) + "</p>"
 
 
 def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int, hidden: int, n_fb: int) -> str:

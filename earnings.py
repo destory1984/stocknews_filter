@@ -1,72 +1,127 @@
 """
-earnings.py — 종목마다 다음 실적 발표일을 야후에서 받아 둔다.
+earnings.py — 종목마다 다음 실적 발표 시각을 받아 둔다.
 
-yfinance 가 있으면 쓰고, 없으면 조용히 꺼진다 (pip install yfinance).
-하루에 한 번만 받고 DB(meta 표)에 적어 둔다. 종목 수만큼 요청하는데 한 번에 0.2~1초씩 걸린다.
+- 시각: 야후 (yfinance 의 get_earnings_dates). 미국 동부 시각으로 오는 것을 한국 시각으로 바꿔 둔다.
+  정각(16:00 등)은 대개 어림값이다. 실제로는 16:05 일 수도 16:30 일 수도 있다.
+  (yfinance 의 calendar 는 이 시각을 PC 시간대로 바꾼 뒤 날짜만 남긴다. 그래서 쓰지 않는다.)
+- 장 전 / 장 뒤: 나스닥 실적 달력(api.nasdaq.com)이 있으면 그것을 믿고, 없으면 야후 시각으로 가른다.
+yfinance 가 없으면 조용히 꺼진다. 하루에 한 번만 받고 DB(meta 표)에 적어 둔다.
 ETF(SOXL, KORU, DRAM 등)는 실적이 없어 비어 있다.
-날짜는 야후가 주는 미국 날짜 그대로다. 장 마감 뒤 발표면 한국에서는 다음 날 아침이다.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+import requests
 
 import store
 
 KST = timezone(timedelta(hours=9))
+NY = ZoneInfo("America/New_York")
 KEY = "earnings"
+FORMAT = 2                                  # 저장 모양이 바뀌면 올린다 (옛 것은 새로 받는다)
+NASDAQ = "https://api.nasdaq.com/api/calendar/earnings"
+NASDAQ_TIME = {"time-pre-market": "장 전", "time-after-hours": "장 뒤"}
+
+
+def _yahoo(t: str):
+    """다음 발표 시각 (미국 동부, tz 있음). 없으면 None."""
+    import yfinance as yf
+    try:
+        df = yf.Ticker(t).get_earnings_dates(limit=8)
+    except Exception:
+        return None                         # ETF 는 404, 그 밖의 실패도 그 종목만 건너뛴다
+    if df is None or df.empty:
+        return None
+    now = datetime.now(timezone.utc) - timedelta(hours=12)   # 발표 당일에도 남겨 둔다
+    future = sorted(ts.to_pydatetime() for ts in df.index if ts.to_pydatetime() >= now)
+    if not future:
+        return None
+    ny = future[0].astimezone(NY)
+    # 야후는 '장 마감 뒤' 를 서머타임과 상관없이 20:00 UTC 로 적는다. 11월 서머타임이 끝나면
+    # 이것이 15:00(장 중)이 되어 버리므로, 뉴욕 시각 16:00 으로 되돌린다 (한국 06:00)
+    if future[0].astimezone(timezone.utc).hour == 20 and future[0].minute == 0:
+        ny = ny.replace(hour=16)
+    return ny
+
+
+def _nasdaq(day: str) -> dict:
+    """그날(미국 날짜) 나스닥 실적 달력: {티커: '장 전' / '장 뒤' / ''}. 못 받으면 {}."""
+    try:
+        r = requests.get(NASDAQ, params={"date": day}, timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        rows = ((r.json().get("data") or {}).get("rows")) or []
+    except (requests.RequestException, ValueError, AttributeError):
+        return {}
+    return {x.get("symbol", ""): NASDAQ_TIME.get(x.get("time", ""), "") for x in rows}
+
+
+def _session(ny: datetime) -> str:
+    minutes = ny.hour * 60 + ny.minute
+    return "장 전" if minutes < 9 * 60 + 30 else "장 뒤" if minutes >= 16 * 60 else "장 중"
 
 
 def _fetch(tickers) -> dict:
     try:
-        import yfinance as yf
+        import yfinance  # noqa: F401
     except ImportError:
         return {}
-    out = {}
+    out, days = {}, {}
     for t in tickers:
-        try:
-            cal = yf.Ticker(t).calendar
-        except Exception:
-            continue                      # ETF 는 404, 그 밖의 실패도 그 종목만 건너뛴다
-        days = cal.get("Earnings Date") if isinstance(cal, dict) else None
-        if days:
-            out[t] = min(days).isoformat()
+        ny = _yahoo(t)
+        if not ny:
+            continue
+        us = "." not in t                   # 005930.KS 같은 한국 종목은 장 전/뒤를 가르지 않는다
+        item = {"at": ny.astimezone(KST).isoformat(), "approx": ny.minute == 0,
+                "session": _session(ny) if us else "", "checked": False}
+        if us:
+            day = ny.date().isoformat()
+            if day not in days:
+                days[day] = _nasdaq(day)
+            if t in days[day]:              # 나스닥에도 그날로 올라 있다
+                item["checked"] = True
+                item["session"] = days[day][t] or item["session"]
+        out[t] = item
     return out
 
 
 def refresh(tickers, force: bool = False) -> dict:
-    """오늘 이미 받았고 종목이 그대로면 적어 둔 것을 쓴다. {티커: 'YYYY-MM-DD'}"""
+    """오늘 이미 받았고 종목이 그대로면 적어 둔 것을 쓴다. {티커: {at, approx, session, checked}}"""
     tickers = sorted({t for t in tickers if t})
     today = datetime.now(KST).date().isoformat()
     try:
         saved = json.loads(store.get_meta(KEY, "{}") or "{}")
     except ValueError:
         saved = {}
-    if not force and saved.get("day") == today and saved.get("tickers") == tickers:
+    if (not force and saved.get("v") == FORMAT and saved.get("day") == today
+            and saved.get("tickers") == tickers):
         return saved.get("dates", {})
     dates = _fetch(tickers)
-    store.set_meta(KEY, json.dumps({"day": today, "tickers": tickers, "dates": dates}))
+    store.set_meta(KEY, json.dumps({"v": FORMAT, "day": today, "tickers": tickers, "dates": dates}))
     return dates
 
 
 def cached() -> dict:
     try:
-        return json.loads(store.get_meta(KEY, "{}") or "{}").get("dates", {})
+        saved = json.loads(store.get_meta(KEY, "{}") or "{}")
     except ValueError:
         return {}
+    return saved.get("dates", {}) if saved.get("v") == FORMAT else {}
 
 
-def upcoming(within_days: int = 30) -> list:
-    """[(티커, 날짜, D-몇)] 가까운 순. 지난 것은 뺀다."""
-    today = datetime.now(KST).date()
+def upcoming(within_days: int = 60) -> list:
+    """[(티커, 한국 시각, D-몇, 항목)] 가까운 순. 지난 것은 뺀다 (발표 뒤 12시간까지는 남긴다)."""
+    now = datetime.now(KST)
     out = []
-    for t, d in cached().items():
+    for t, item in cached().items():
         try:
-            day = date.fromisoformat(d)
-        except ValueError:
+            at = datetime.fromisoformat(item["at"]).astimezone(KST)
+        except (KeyError, TypeError, ValueError):
             continue
-        left = (day - today).days
-        if 0 <= left <= within_days:
-            out.append((t, day, left))
+        left = (at.date() - now.date()).days
+        if at >= now - timedelta(hours=12) and left <= within_days:
+            out.append((t, at, max(left, 0), item))
     return sorted(out, key=lambda x: (x[1], x[0]))
