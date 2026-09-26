@@ -114,8 +114,15 @@ def row(label: str, control: str, tip: str = "") -> str:
     return f"<div class=mrow>{label}{control}</div>{_more(tip)}"
 
 
+# 휴지통 아이콘. 글자색(currentColor)을 따라가서 마우스를 올리면 빨개진다
+TRASH = ("<svg width=14 height=14 viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2 "
+         "stroke-linecap=round stroke-linejoin=round aria-hidden=true><path d='M3 6h18'/>"
+         "<path d='M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2'/><path d='M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6'/>"
+         "<path d='M10 11v6M14 11v6'/></svg>")
+
+
 def stocks_html(stocks: list) -> str:
-    """종목 칸: 이름 칩(누르면 자세히 고치기) + ×, 추가 입력."""
+    """종목 칸: 이름 칩(누르면 자세히 고치기) + 휴지통, 추가 입력."""
     chips = []
     for s in stocks:
         j = lambda k: e(", ".join(s.get(k, [])))
@@ -123,7 +130,7 @@ def stocks_html(stocks: list) -> str:
             f"<div class=stock data-name=\"{e(s['name'])}\">"
             f"<div class=srow><button type=button class=sname aria-expanded=false title='눌러서 자세히 고치기'>"
             f"{e(s['name'])}{' <small>' + e(s['yahoo']) + '</small>' if s.get('yahoo') else ''}</button>"
-            f"<button type=button class=sdel title='종목에서 빼기' aria-label=삭제>×</button></div>"
+            f"<button type=button class=sdel title='종목에서 빼기' aria-label=삭제>{TRASH}</button></div>"
             f"<div class=sedit hidden>"
             f"<label>이름 <input name=name value=\"{e(s['name'])}\"></label>"
             f"<label>구글 검색어 <input name=google value=\"{e(s.get('google', ''))}\" placeholder=\"{e(s['name'])}\"></label>"
@@ -157,7 +164,7 @@ def menu(cfg: dict, stocks: list) -> str:
   {row(_label("알림 시한", "나온 지 이보다 오래되면 알리지 않는다", "구글 뉴스는 기사가 나온 뒤 늦게 잡히기도 한다. 너무 짧으면 놓치고, 길면 PC 가 깨어났을 때 지난 뉴스가 울린다. 시한이 지난 뉴스도 판별해서 목록에는 올린다."), _select(cfg, "max_age_min", "알림 시한"),
        "구글 뉴스는 기사가 나온 뒤 늦게 잡히기도 한다. 너무 짧으면 놓치고, 길면 PC 가 깨어났을 때 지난 뉴스가 울린다. 시한이 지난 뉴스도 판별해서 목록에는 올린다.")}
   {row(_label("텔레그램", "폰으로도 받기" if tg_ok else "환경변수가 없어 보낼 수 없다", "알림을 텔레그램으로도 보낸다. 봇 토큰과 대화방은 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 에서 읽는다 (RSI 모니터와 같은 것).", "tgnote"),
-       "<span class=mbtns><button type=button class=hbtn id=tgtest title='시험 메시지를 한 번 보낸다'>보내 보기</button>" + _switch(cfg, "telegram", "텔레그램으로 보내기") + "</span>",
+       "<span class=mbtns><button type=button class=hbtn id=tgtest title='시험 메시지를 한 번 보낸다'>전송 테스트</button>" + _switch(cfg, "telegram", "텔레그램으로 보내기") + "</span>",
        "알림을 텔레그램으로도 보낸다. 봇 토큰과 대화방은 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 에서 읽는다 (RSI 모니터와 같은 것).")}
 
   <div class=mhead>소리 <small>꺼 둔 때도 알림 목록에는 쌓인다</small></div>
@@ -208,7 +215,7 @@ header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .menu .srow{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--sel)}
 .menu .sname{font:inherit;font-weight:600;border:0;background:none;color:var(--text);cursor:pointer;padding:4px 0;text-align:left}
 .menu .sname small{font-weight:400;color:var(--muted)} .menu .sname:hover,.menu .sname[aria-expanded="true"]{color:var(--down)}
-.menu .sdel{font:inherit;border:0;background:none;color:var(--muted);cursor:pointer;border-radius:4px;padding:0 6px}
+.menu .sdel{font:inherit;border:0;background:none;color:var(--muted);cursor:pointer;border-radius:4px;padding:3px 5px;display:inline-flex;align-items:center}
 .menu .sdel:hover{color:var(--neg);background:var(--bg)}
 .menu .sedit{display:grid;gap:4px;padding:6px 0 8px 8px}
 .menu .sedit label{display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--muted)}

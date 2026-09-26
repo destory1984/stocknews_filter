@@ -169,7 +169,7 @@ def new_stock(name, yahoo=""):
     name, yahoo = name.strip(), yahoo.strip().upper()
     if not name:
         raise ValueError("이름을 넣어 주세요")
-    if yahoo and not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-^=]{0,14}", yahoo):
+    if yahoo and not re.fullmatch(r"\^?[A-Z0-9][A-Z0-9.\-=]{0,14}", yahoo):
         raise ValueError(f"야후 티커 형식이 아닙니다: {yahoo}")
     stock = {"name": name}
     if name.isascii():
@@ -214,7 +214,7 @@ def update_stock(old_name, fields):
         stock["lang"] = "en"
     yahoo = (fields.get("yahoo") or "").strip().upper()
     if yahoo:
-        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-^=]{0,14}", yahoo):
+        if not re.fullmatch(r"\^?[A-Z0-9][A-Z0-9.\-=]{0,14}", yahoo):
             raise ValueError(f"야후 티커 형식이 아닙니다: {yahoo}")
         if yahoo != stocks[idx].get("yahoo") and not list(yahoo_news({"yahoo": yahoo}, 1)):
             raise ValueError(f"야후에 {yahoo} 뉴스가 없습니다. 티커를 확인해 주세요")
