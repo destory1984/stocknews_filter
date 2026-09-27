@@ -1712,8 +1712,8 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
         # 가장 오래된 뉴스를 섞는다. 새 뉴스는 위에 붙으니 자동 갱신 뒤에도 id 가 그대로다.
         gid = (hashlib.md5(f"{head.get('topic', '')}|{kids[-1]['id']}".encode()).hexdigest()[:10]
                if kids else "")
-        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids))
-        rows.extend(row_html(k, fb, done, qs, child_of=gid) for k in kids)
+        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids, muted=muted))
+        rows.extend(row_html(k, fb, done, qs, child_of=gid, muted=muted) for k in kids)
     if stock and not rows:
         rows.append(f"<tr><td colspan=4 class=why>{html.escape(stock)} 뉴스가 " + ("없습니다." if show_all else
                     f"보이는 것이 없습니다 (숨긴 {hidden}건은 '모두 보기').") + "</td></tr>")
@@ -1732,7 +1732,8 @@ def reasons_html(r: dict) -> str:
     return pro + f"<span class=con>－ {html.escape(r['con'])}</span>"
 
 
-def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "") -> str:
+def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "",
+             muted=frozenset()) -> str:
     t = parse_ts(r.get("created_at", ""))
     when = t.astimezone(KST).strftime("%m-%d %H:%M") if t else ""
     real = parse_ts(r.get("published_real") or "")
@@ -1755,7 +1756,11 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
           "rule": "<div class=by title='모델에 묻지 않고 규칙으로 거름'>📏</div>"}.get(r.get("by"), "")
     topic = f"<span class=tp>{html.escape(r['topic'])}</span>" if r.get("topic") else ""
     source = SOURCE_NAMES.get(r.get("source", ""), r.get("source", ""))
-    src = f"<span class=src>{html.escape(source)}</span>" if source else ""
+    # 언론사 이름표를 누르면 그 자리에서 목록에서 가린다 (가린 것은 '모두 보기' 에서 눌러 되살린다)
+    off = stocknews.source_key(r.get("source", "")) in muted
+    src = (f"<a class='src{' off' if off else ''}' data-src=\"{html.escape(source, quote=True)}\" data-off={int(off)} "
+           f"title='{'눌러서 이 언론사 되살리기' if off else '눌러서 이 언론사를 목록에서 가리기'}'>{html.escape(source)}</a>"
+           if source else "")
     src = "".join(f"<a class=stk href='/?s={quote(t)}' title='{html.escape(t, quote=True)} 뉴스만 보기'>"
                   f"{html.escape(t)}</a>" for t in tickers_of(r)) + src
     # 누른 버튼은 불이 켜지고, 다시 누르면 취소된다.
@@ -1935,7 +1940,7 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} a.src{{cursor:pointer}} a.src:hover{{background:#4a2f33;color:#e6e6e6}} a.src.off{{text-decoration:line-through;opacity:.7}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
 #recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} .pro{{color:#8fc79a}} .con{{color:#d9918f;margin-left:4px}} #upd:empty{{display:none}}
@@ -2031,6 +2036,16 @@ function applyOpen() {{
 
 // 👍/👎 는 페이지를 옮기지 않고 기록한다. 그래서 스크롤 위치가 그대로 남는다.
 document.getElementById("list").addEventListener("click", async (e) => {{
+  const badge = e.target.closest("a.src");
+  if (badge) {{   // 언론사 이름표: 목록에서 가리기 / 되살리기 (판별·알림은 그대로)
+    const off = badge.dataset.off === "1";
+    if (!confirm(badge.dataset.src + (off ? " 를 목록에 되살릴까요?" : " 를 목록에서 가릴까요? (판별·알림은 그대로, 성적표에서 되살릴 수 있다)"))) return;
+    const r = await fetch("/hide-source", {{method: "POST", headers: {{"X-Settings": "yes", "Content-Type": "application/json"}},
+      body: JSON.stringify({{source: badge.dataset.src, hide: !off}})}});
+    if (!r.ok) {{ alert("바꾸지 못했습니다 (" + r.status + ")"); return; }}
+    await refresh();
+    return;
+  }}
   const sg = e.target.closest("a.sumget");
   if (sg) {{
     if (sg.dataset.busy) return;
