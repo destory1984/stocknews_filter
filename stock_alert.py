@@ -74,6 +74,10 @@ DEFAULTS = {
     # 같은 사건은 이 시간 안에 한 번만 알린다. 같은 종목이고 사건 이름의 낱말(회사 이름 뒤)이 겹치면 같은 사건으로 본다.
     # 1시간·같은 이름일 때 09-26 하루 35번 (마이크론 실적 예고만 10번 가까이) → 12시간·낱말 겹침으로 되돌려 보니 21번
     "topic_hours": 12,
+    # 기준 점수에 못 미쳐도 6시간 안에 언론사 buzz_sources 곳 넘게 쓴 사건이면 알린다 (buzz_min_score 점 이상만, 0 이면 끔).
+    # 09-27 까지 기록으로 되돌려 보면 하루 한 번쯤 (높은 점수 사건은 이미 알림이 나가서)
+    "buzz_sources": 4,
+    "buzz_min_score": 5,
     "catchup_hours": 12,           # 절전·재시작으로 밀린 뉴스는 이만큼까지 거슬러 판별해 목록에만 올린다
     "batch": 10,                   # 한 번에 묻는 뉴스 수
     "poll_sec": 10,
@@ -908,6 +912,12 @@ class Watcher:
                 seen.append(t)
         return seen[:40]
 
+    def outlets(self, topic: str, tickers: str, source: str = "") -> int:
+        """6시간 안에 같은 사건(same_event)을 쓴 언론사 수 (이름 갈래는 합쳐 센다). source 는 지금 판별하는 뉴스의 것."""
+        keys = {stocknews.source_key(r.get("source", "")) for r in self.recent(6)
+                if same_event(topic, tickers, r.get("topic", ""), r.get("tickers", ""))}
+        return len((keys | {stocknews.source_key(source)}) - {""})
+
     def topic_alerted(self, topic: str, tickers: str) -> bool:
         """topic_hours 안에 같은 사건으로 알림을 보냈는가 (same_event)."""
         return bool(topic) and any(r.get("alerted") and same_event(topic, tickers, r.get("topic", ""), r.get("tickers", ""))
@@ -1150,6 +1160,16 @@ class Watcher:
                 alert = (score >= self.cfg["threshold"] and not late
                          and not self.topic_alerted(topic, r.get("tickers", ""))
                          and not self.is_dup(r["title"]))
+                buzz = 0
+                if (not alert and self.cfg.get("buzz_sources") and score >= self.cfg.get("buzz_min_score", 5)
+                        and not late and not self.topic_alerted(topic, r.get("tickers", ""))
+                        and not self.is_dup(r["title"])):
+                    buzz = self.outlets(topic, r.get("tickers", ""), r.get("source", ""))
+                    if buzz >= self.cfg["buzz_sources"]:
+                        alert = True
+                        reason = f"{buzz}곳 보도 · {reason}"
+                    else:
+                        buzz = 0
                 pub = None
                 if alert and r.get("feed") == "google":
                     # 알리기 전에 원문 날짜를 본다. 구글이 막는 중이거나 날짜를 못 찾으면 그대로 알린다
@@ -1328,7 +1348,7 @@ def make_handler(watcher: Watcher):
 SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "max_age_min": "알림 시한", "tts": "음성",
                   "tts_voice": "목소리", "tts_voice_en": "영어 언론사 목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
                   "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
-                  "catchup_hours": "밀린 뉴스", "topic_hours": "같은 사건 알림", "backend": "판별 LLM", "claude_model": "Claude 모델",
+                  "catchup_hours": "밀린 뉴스", "topic_hours": "같은 사건 알림", "buzz_sources": "여러 곳 보도 알림", "backend": "판별 LLM", "claude_model": "Claude 모델",
                   "model": "Ollama 모델", "hide_max_score": "숨기기",
                   "summarize": "구글 기사 요약"}
 
@@ -1775,7 +1795,9 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
     group = ""
     if kids:
         top = max(k["score"] for k in kids)
-        group = (f" <a class=grp data-g='{gid}'>같은 사건 +{len(kids)}건 (최고 {top}점) ▾</a>")
+        n_src = len({stocknews.source_key(x.get("source", "")) for x in (r, *kids)} - {""})
+        group = (f" <a class=grp data-g='{gid}'>같은 사건 +{len(kids)}건 (최고 {top}점"
+                 f"{f', {n_src}곳' if n_src > 1 else ''}) ▾</a>")
     # 누가 판별했는지: 🦙 Ollama, ✴ Claude
     by = {"ollama": "<div class=by title='Ollama 가 판별'>🦙</div>",
           "claude": "<div class='by cl' title='Claude 가 판별'>✴</div>",
