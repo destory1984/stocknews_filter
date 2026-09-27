@@ -9,6 +9,7 @@ koreainvest 의 bars.db 와 같은 방식: WAL 로 열어 읽는 동안에도 �
   feedback  🔔10·👍·👎·🔕0 반응. 누를 때마다 한 줄씩 쌓고, 같은 뉴스는 마지막 줄이 이긴다
   meta      옛 CSV·jsonl 을 옮겼는지 등
   moves     급등락 알림 (15분 변동, 그때 원인 후보로 붙인 뉴스)
+  reactions 알림 뒤 1시간 주가 반응 (change 가 null 이면 장이 닫혀 있었거나 티커가 없다)
 """
 import csv
 import json
@@ -46,6 +47,8 @@ create index if not exists judged_at on judged(at);
 create table if not exists feedback (
     n integer primary key autoincrement, id text, title text, "like" int, strong int, at text);
 create table if not exists meta (k text primary key, v text);
+create table if not exists reactions (
+    id text primary key, ticker text, alert_at text, p0 real, p1 real, change real, note text, checked_at text);
 create table if not exists moves (
     n integer primary key autoincrement, at text, ticker text, name text,
     change real, price real, news text);     -- news: 원인 후보 [{title, url, score}] JSON
@@ -278,6 +281,18 @@ def read_moves(name: str = "", limit: int = 10) -> list:
         sql, args = sql + " where name = ?", (name,)
     rows = con().execute(sql + " order by at desc limit ?", args + (limit,)).fetchall()
     return [dict(r, news=json.loads(r["news"] or "[]")) for r in rows]
+
+
+def add_reaction(nid: str, ticker: str, alert_at: str, res, note: str = ""):
+    p0, p1, change = res if res else (None, None, None)
+    _commit("insert or replace into reactions values (?,?,?,?,?,?,?,?)",
+            (nid, ticker, alert_at, p0, p1, change, note,
+             datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds")))
+
+
+def reactions() -> dict:
+    """{뉴스 id: {ticker, change, note}}"""
+    return {r["id"]: dict(r) for r in con().execute("select id, ticker, change, note from reactions")}
 
 
 def reset(what: str) -> list:

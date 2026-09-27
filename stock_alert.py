@@ -878,6 +878,7 @@ class Watcher:
         self.last_earn = 0.0      # 실적일을 마지막으로 살핀 시각. 받는 것은 하루 한 번 (earnings.refresh)
         self.last_moves = 0.0     # 급등락을 마지막으로 살핀 시각 (5분마다)
         self.move_seen = {}       # 티커 → 마지막으로 알린 시각 (같은 종목은 move_cooldown_min 에 한 번)
+        self.last_react = 0.0     # 알림 뒤 주가 반응을 마지막으로 살핀 시각 (10분마다)
         self.moves = store.read_moves()   # 최근 급등락 [{at, ticker, name, change, price, news}] 새것부터, 10개까지
         self.fetch_note = "아직 받지 않음"
 
@@ -1024,6 +1025,33 @@ class Watcher:
                     log(f"실적 발표 텔레그램 실패: {err}")
             say_alert(self.cfg, f"{name}, 실적 발표. {when}" + (f", {session}." if session else "."))
 
+    def check_reactions(self):
+        """10분마다: 알린 지 65분 넘은 뉴스의 1시간 주가 반응을 적는다 (한 번만). 종목이 여럿이면 첫 종목."""
+        if time.time() - self.last_react < 600:
+            return
+        self.last_react = time.time()
+        now = datetime.now(KST)
+        done = set(store.reactions())
+        todo = [r for r in self.judged.values() if r.get("alerted") and r["id"] not in done
+                and now - timedelta(hours=48) <= datetime.fromisoformat(r["at"]) <= now - timedelta(minutes=65)]
+        if not todo:
+            return
+        yahoo = {s["name"]: s.get("yahoo", "") for s in load_stocks()}
+
+        def job():
+            for r in todo:
+                t = next((yahoo[n] for n in tickers_of(r) if yahoo.get(n)), "")
+                if not t:
+                    store.add_reaction(r["id"], "", r["at"], None, "티커 없음")
+                    continue
+                res = moves.reaction(t, datetime.fromisoformat(r["at"]))
+                if res is False:   # 야후에서 못 받음: 적지 않고 다음 차례에 다시
+                    continue
+                store.add_reaction(r["id"], t, r["at"], res, "" if res else "장 닫힘")
+                if res:
+                    log(f"📊 알림 1시간 뒤 {t} {res[2]:+.1f}% · {(r.get('title_ko') or r['title'])[:60]}")
+        threading.Thread(target=job, daemon=True).start()
+
     def check_moves(self):
         """5분마다 뒤에서 15분 변동을 본다. 기준을 넘으면 화면·토스트·음성(·텔레그램)."""
         if not self.cfg.get("move_alerts") or time.time() - self.last_moves < 300:
@@ -1125,6 +1153,7 @@ class Watcher:
     def step(self):
         self.check_weekly()
         self.check_moves()
+        self.check_reactions()
         self.check_earnings()
         self.fetch()
         self.summarizer.poke()
@@ -1695,6 +1724,7 @@ def tickers_of(r: dict) -> list:
 def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int = PAGE_SIZE,
          stock: str = "") -> str:
     """판별 목록. stock 을 주면 그 종목 뉴스만 (목록의 종목 이름을 누르면 ?s=종목)."""
+    rx = store.reactions()
     fbrecs = latest_feedback()
     fb = {k: fb_key(v) for k, v in fbrecs.items()}
     whys = {k: v.get("why", "") for k, v in fbrecs.items()}
@@ -1747,8 +1777,8 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
         # 가장 오래된 뉴스를 섞는다. 새 뉴스는 위에 붙으니 자동 갱신 뒤에도 id 가 그대로다.
         gid = (hashlib.md5(f"{head.get('topic', '')}|{kids[-1]['id']}".encode()).hexdigest()[:10]
                if kids else "")
-        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids, muted=muted, whys=whys))
-        rows.extend(row_html(k, fb, done, qs, child_of=gid, muted=muted, whys=whys) for k in kids)
+        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids, muted=muted, whys=whys, rx=rx))
+        rows.extend(row_html(k, fb, done, qs, child_of=gid, muted=muted, whys=whys, rx=rx) for k in kids)
     if stock and not rows:
         rows.append(f"<tr><td colspan=4 class=why>{html.escape(stock)} 뉴스가 " + ("없습니다." if show_all else
                     f"보이는 것이 없습니다 (숨긴 {hidden}건은 '모두 보기').") + "</td></tr>")
@@ -1778,8 +1808,18 @@ def why_html(nid: str, state, why: str) -> str:
         for w in WHY_CHOICES) + "</div>")
 
 
+def reaction_html(x) -> str:
+    """알림 1시간 뒤 주가 (한국식: 오르면 빨강, 내리면 파랑)."""
+    if not x or x.get("change") is None:
+        return ""
+    c = x["change"]
+    color = "#e06c6c" if c > 0 else "#6c9be0" if c < 0 else "#8a9099"
+    return (f" <span class=rx style='color:{color}' title='알림 때와 1시간 뒤 {html.escape(x['ticker'])} 값 (야후 5분봉)'>"
+            f"1시간 뒤 {c:+.1f}%</span>")
+
+
 def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "",
-             muted=frozenset(), whys=None) -> str:
+             muted=frozenset(), whys=None, rx=None) -> str:
     t = parse_ts(r.get("created_at", ""))
     when = t.astimezone(KST).strftime("%m-%d %H:%M") if t else ""
     real = parse_ts(r.get("published_real") or "")
@@ -1825,11 +1865,28 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         f"{html.escape(r.get('title_ko') or r['title'])}</a>"
         # 요약은 접어 둔다. '요약 ▾' 을 누르면 편다
         + (f"<div class=sum data-id='{r['id']}'>{html.escape(r['summary_ko'])}</div>" if r.get("summary_ko") else "")
-        + f"<div class=why>{src}{topic}{reasons_html(r)}"
+        + f"<div class=why>{src}{topic}{reasons_html(r)}{reaction_html((rx or {}).get(r['id']))}"
         + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else
            f" <a class=sumget data-id='{r['id']}' title='원문을 받아 Ollama 로 요약한다 (구글에 한 번 묻는다)'>요약 받기</a>"
            if "news.google.com" in r.get("url", "") and not r.get("summary_state") else "")
         + f"{group}</div>{why_html(r['id'], state, (whys or {}).get(r['id'], ''))}</td></tr>")
+
+
+def movers_html(watcher: Watcher) -> str:
+    """주간 리포트: 알린 뒤 1시간에 주가가 크게 움직인 뉴스 다섯."""
+    rx = store.reactions()
+    cutoff = (datetime.now(KST) - timedelta(days=7)).isoformat(timespec="seconds")
+    got = [(rx[r["id"]], r) for r in watcher.judged.values()
+           if r.get("alerted") and r.get("at", "") >= cutoff and rx.get(r["id"], {}).get("change") is not None]
+    if not got:
+        return "<p class=why>주가를 움직인 알림: 아직 기록 없음 (알림 1시간 뒤 값을 적는다)</p>"
+    got.sort(key=lambda x: -abs(x[0]["change"]))
+    items = "".join(f"<li><b style='color:{'#e06c6c' if x['change'] > 0 else '#6c9be0'}'>{x['change']:+.1f}%</b> "
+                    f"<span class=why>{html.escape(x['ticker'])} · {r['at'][5:16].replace('T', ' ')}</span> "
+                    f"<a href=\"{html.escape(r['url'])}\" target=_blank>{html.escape(r.get('title_ko') or r['title'])}</a></li>"
+                    for x, r in got[:5])
+    return (f"<div class=card><b>주가를 움직인 알림</b> <span class=why>알린 뒤 1시간, 크게 움직인 순 "
+            f"({len(got)}건 가운데)</span><ul>{items}</ul></div>")
 
 
 def week_page(watcher: Watcher) -> str:
@@ -1869,6 +1926,7 @@ h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px
 <p class=why>{(now - timedelta(days=7)):%m-%d} ~ {now:%m-%d %H:%M} · 판별한 뉴스 {r['news']}건 · 알림 {r['alerts']}건 ·
 👍 {r['up']} · 👎 {r['down']} · 등락은 야후 일봉 종가 (7일 전 → 마지막)</p>
 <p class=why>많이 나온 사건 ({watcher.cfg['threshold']}점 이상): {topics}</p>
+{movers_html(watcher)}
 {''.join(cards)}"""
 
 
