@@ -1690,16 +1690,16 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
     more = max(0, len(recs) - limit)
     recs = recs[:limit]
     qs = ("&all=1" if show_all else "") + (f"&s={quote(stock)}" if stock else "")
-    # 같은 사건(topic)은 가장 최근 뉴스 한 줄로 접는다. 6시간 넘게 떨어지면 다른 묶음으로 본다.
-    heads, members, order = {}, {}, []
+    # 같은 사건은 가장 최근 뉴스 한 줄로 접는다. 6시간 넘게 떨어지면 다른 묶음으로 본다.
+    # 같은 사건인지는 알림과 같은 same_event 로 본다 ("삼성전자 3분기 실적" · "삼성전자 3분기 영업익" · "삼성전자 100조 실적")
+    members, order = {}, []
     for r in recs:
         tp, t = r.get("topic"), parse_ts(r.get("created_at", ""))
-        h = heads.get(tp) if tp else None
+        h = next((x for x in reversed(order) if x.get("topic")
+                  and same_event(tp, r.get("tickers", ""), x["topic"], x.get("tickers", ""))), None) if tp else None
         if h and t and (parse_ts(h["created_at"]) - t) <= timedelta(hours=6):
             members[h["id"]].append(r)
         else:
-            if tp:
-                heads[tp] = r
             members[r["id"]] = []
             order.append(r)
     rows = []
