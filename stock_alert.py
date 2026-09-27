@@ -924,11 +924,14 @@ class Watcher:
         return sorted(out, key=lambda r: (self.is_late(r), r["ts"]))
 
     def drop_junk(self, todo: list) -> list:
-        """옵션 시세 페이지·소송 모집 광고 같은 것은 모델에 묻지 않고 0점으로 적는다 (stocknews.JUNK).
+        """옵션 시세 페이지·소송 모집 광고, 제목 날짜가 오래된 옛 기사는 모델에 묻지 않고 0점으로 적는다 (stocknews.JUNK, old_by_title).
         목록에서는 점수가 낮아 숨고, '모두 보기' 에서 📏 로 보인다."""
         rest = []
         for r in todo:
             why = stocknews.junk_reason(r["title"])
+            if not why:   # 제목에 적힌 날짜가 구글이 붙인 날짜보다 사흘 넘게 앞서면 옛 기사
+                old = stocknews.old_by_title(r["title"], r.get("ts"), self.cfg["stale_days"])
+                why = f"옛 기사 ({old})" if old else ""
             if not why:
                 rest.append(r)
                 continue

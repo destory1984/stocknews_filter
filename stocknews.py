@@ -151,6 +151,32 @@ def source_key(src):
     return re.sub(r"[^\w]", "", s)       # "24/7 Wall St." -> 247wallst
 
 
+# A date written in an English title ("... Pre-Market Today, Sept. 17?") that is days before the
+# date Google gave the item means an old story Google re-dated. Only English month names: Korean
+# titles often mention past dates in ordinary news ("지난 9월 17일 발표한 ...").
+_MONTHS = {m: i for i, names in enumerate(
+    [("jan", "january"), ("feb", "february"), ("mar", "march"), ("apr", "april"), ("may",), ("jun", "june"),
+     ("jul", "july"), ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
+     ("nov", "november"), ("dec", "december")], 1) for m in names}
+_TITLE_DATE = re.compile(r"\b(" + "|".join(sorted(_MONTHS, key=len, reverse=True))
+                         + r")\.? (\d{1,2})(?:st|nd|rd|th)?\b", re.I)
+
+
+def old_by_title(title, ref, days=3):
+    """"제목 날짜 09-17" if the title carries a month-day more than `days` before `ref`, else ""."""
+    m = _TITLE_DATE.search(title or "")
+    if not m or not ref:
+        return ""
+    month, day = _MONTHS[m.group(1).lower()], int(m.group(2))
+    try:
+        dt = ref.replace(month=month, day=day, hour=23, minute=59)
+    except ValueError:
+        return ""
+    if dt > ref + timedelta(days=60):          # "Dec 30" seen in early January
+        dt = dt.replace(year=ref.year - 1)
+    return f"제목 날짜 {month:02d}-{day:02d}" if dt < ref - timedelta(days=days) else ""
+
+
 def keep(item, stock, since):
     if item["published"] and item["published"] < since:
         return False
