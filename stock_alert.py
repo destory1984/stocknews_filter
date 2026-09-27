@@ -68,6 +68,10 @@ DEFAULTS = {
     "threshold": 7,                # 이 점수 이상이면 알린다
     "fetch_min": 5,                # 구글 뉴스·야후 RSS 를 이 간격(분)으로 받는다
     "lookback_days": 1,            # RSS 에서 며칠 전 뉴스까지 받을지
+    # 구글은 관련도 순으로 수십 건만 주어서 하루치로 물으면 방금 나온 기사가 빠진다 (09-28: 1시간 안 25건 중 17건).
+    # 그래서 평소에는 fresh_hours 시간치만 묻고, 하루치(lookback_days)는 wide_every_min 분마다 한 번 묻는다
+    "fresh_hours": 1,
+    "wide_every_min": 30,
     # 이보다 오래된 뉴스는 알리지 않는다 (판별은 한다).
     # 구글 뉴스는 기사가 나온 뒤 늦게 잡히기도 해서 saveticker(60분)보다 길게 둔다.
     "max_age_min": 120,
@@ -191,17 +195,26 @@ def parse_ts(s: str):
         return None
 
 
+_last_wide = 0.0   # 구글에 lookback_days 치를 마지막으로 물은 시각. 켜자마자 한 번은 하루치로 묻는다
+
+
 def fetch_news(cfg: dict) -> int:
     """구글 뉴스·야후 RSS 에서 종목 뉴스를 받아 DB 에 넣는다. 새로 넣은 건수를 돌려준다.
     id 는 링크의 해시. 두 종목에 함께 걸린 기사는 한 줄로 두고 tickers 에 둘 다 적는다.
-    구글과 야후가 같은 기사를 다른 링크로 주는 일이 있어, 최근 이틀 안에 같은 제목이 있으면 넣지 않는다."""
+    구글과 야후가 같은 기사를 다른 링크로 주는 일이 있어, 최근 이틀 안에 같은 제목이 있으면 넣지 않는다.
+    구글은 평소 fresh_hours 시간치만, wide_every_min 분마다 한 번 lookback_days 치를 묻는다."""
+    global _last_wide
     try:
         stocks = stocknews.load_watchlist()
     except SystemExit as e:
         log(str(e))
         return 0
+    wide = time.time() - _last_wide >= cfg["wide_every_min"] * 60
+    if wide:
+        _last_wide = time.time()
     rows = stocknews.collect(stocks, cfg["lookback_days"], ["google", "yahoo"],
-                             on_error=lambda m: log(f"수집 실패 {m}"))
+                             on_error=lambda m: log(f"수집 실패 {m}"),
+                             google_when=None if wide else f"{cfg['fresh_hours']}h")
     known = store.known_ids()
     titles = {stocknews.norm_title(t) for t in store.recent_titles()}
     now = datetime.now(timezone.utc)

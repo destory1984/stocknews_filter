@@ -74,11 +74,14 @@ def parse_rss(raw):
         }
 
 
-def google_news(stock, days):
+def google_news(stock, days, when=None):
+    """`when` narrows the search window ("1h"). Google returns a few dozen items ranked by
+    relevance, not date, so a one-day search for a busy stock leaves out articles from the last
+    hour: on 2026-09-28 a "when:1h" search found 25 items and 17 were missing from "when:1d"."""
     lang = stock.get("lang", "ko")
     query = stock.get("google") or stock["name"]
     params = dict(GOOGLE_LOCALE.get(lang, GOOGLE_LOCALE["ko"]))
-    params["q"] = f"{query} when:{days}d"
+    params["q"] = f"{query} when:{when or f'{days}d'}"
     url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(params)
     for it in parse_rss(fetch(url)):
         # Google appends " - Publisher" to the title; the publisher is also in <source>.
@@ -329,7 +332,7 @@ def norm_title(title):
     return re.sub(r"[\W_]+", "", title.lower())
 
 
-def collect(stocks, days, sources, on_error=None):
+def collect(stocks, days, sources, on_error=None, google_when=None):
     on_error = on_error or (lambda msg: print(msg, file=sys.stderr))
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = []
@@ -338,7 +341,10 @@ def collect(stocks, days, sources, on_error=None):
         titles = set()
         for name in sources:
             try:
-                items = list(SOURCES[name](stock, days))
+                if name == "google":
+                    items = list(google_news(stock, days, when=google_when))
+                else:
+                    items = list(SOURCES[name](stock, days))
             except (urllib.error.URLError, ET.ParseError, TimeoutError) as e:
                 # Print only the error type/reason, never the full request.
                 on_error(f"[{stock['name']}] {name} failed: {type(e).__name__}")
