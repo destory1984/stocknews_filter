@@ -281,9 +281,14 @@ def latest_feedback() -> dict:
     return store.latest_feedback()   # 같은 뉴스에 여러 번 누르면 마지막 것
 
 
+# 👎·🔕0 을 누른 뒤 고르는 까닭. 판별 프롬프트의 [과거 반응] 에 "(까닭: …)" 으로 붙는다
+WHY_CHOICES = ("옛 기사", "같은 내용 반복", "관심 없는 종류", "광고·시세 페이지", "종목과 무관")
+
+
 def examples_text(n: int) -> str:
     recs = sorted(latest_feedback().values(), key=lambda x: x.get("at", ""), reverse=True)
-    groups = {k: [r["title"] for r in recs if fb_key(r) == k] for k in FB_VALUES}
+    groups = {k: [r["title"] + (f" (까닭: {r['why']})" if r.get("why") else "") for r in recs if fb_key(r) == k]
+              for k in FB_VALUES}
     # 10점·0점은 드물고 중요하니 더 많이 남긴다
     lines = ([f"🔔 {t}" for t in groups["10"][:n * 2]] + [f"👍 {t}" for t in groups["1"][:n]]
              + [f"👎 {t}" for t in groups["0"][:n]] + [f"🔕 {t}" for t in groups["00"][:n * 2]])
@@ -1260,6 +1265,14 @@ def make_handler(watcher: Watcher):
                 self.send_header("Location", f"/?done={rec['id']}" + ("&all=1" if q.get("all") else "")
                                  + (f"&s={quote(q['s'])}" if q.get("s") else ""))
                 self.end_headers()
+            elif u.path == "/fbwhy":   # 👎·🔕0 을 누른 까닭
+                if q.get("id") in watcher.judged and q.get("why") in WHY_CHOICES:
+                    store.set_why(q["id"], q["why"])
+                    log(f"까닭 [{q['why']}] {watcher.judged[q['id']]['title'][:70]}")
+                    self.send_response(204)
+                else:
+                    self.send_response(400)
+                self.end_headers()
             elif u.path == "/ver":   # 페이지가 2초마다 묻는다. 바뀌었으면 목록을 다시 받는다
                 data = str(watcher.ver).encode()
                 self.send_response(200)
@@ -1662,7 +1675,9 @@ def tickers_of(r: dict) -> list:
 def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int = PAGE_SIZE,
          stock: str = "") -> str:
     """판별 목록. stock 을 주면 그 종목 뉴스만 (목록의 종목 이름을 누르면 ?s=종목)."""
-    fb = {k: fb_key(v) for k, v in latest_feedback().items()}
+    fbrecs = latest_feedback()
+    fb = {k: fb_key(v) for k, v in fbrecs.items()}
+    whys = {k: v.get("why", "") for k, v in fbrecs.items()}
     recs = sorted(watcher.judged.values(), key=lambda r: r.get("created_at", ""), reverse=True)
     # 👎·0점 준 뉴스와 점수가 낮은 뉴스는 기본으로 숨긴다.
     # 방금 누른 것은 기록됐다는 표시를 위해, 👍·10점 준 것은 점수와 상관없이 남긴다.
@@ -1712,8 +1727,8 @@ def page(watcher: Watcher, done: str = None, show_all: bool = False, limit: int 
         # 가장 오래된 뉴스를 섞는다. 새 뉴스는 위에 붙으니 자동 갱신 뒤에도 id 가 그대로다.
         gid = (hashlib.md5(f"{head.get('topic', '')}|{kids[-1]['id']}".encode()).hexdigest()[:10]
                if kids else "")
-        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids, muted=muted))
-        rows.extend(row_html(k, fb, done, qs, child_of=gid, muted=muted) for k in kids)
+        rows.append(row_html(head, fb, done, qs, gid=gid, kids=kids, muted=muted, whys=whys))
+        rows.extend(row_html(k, fb, done, qs, child_of=gid, muted=muted, whys=whys) for k in kids)
     if stock and not rows:
         rows.append(f"<tr><td colspan=4 class=why>{html.escape(stock)} 뉴스가 " + ("없습니다." if show_all else
                     f"보이는 것이 없습니다 (숨긴 {hidden}건은 '모두 보기').") + "</td></tr>")
@@ -1732,8 +1747,19 @@ def reasons_html(r: dict) -> str:
     return pro + f"<span class=con>－ {html.escape(r['con'])}</span>"
 
 
+def why_html(nid: str, state, why: str) -> str:
+    """👎·🔕0 을 누른 뉴스 밑: 고른 까닭, 아직 안 골랐으면 고를 단추들."""
+    if state not in ("0", "00"):
+        return ""
+    if why:
+        return f"<div class=whyset>까닭: {html.escape(why)}</div>"
+    return ("<div class=whypick>까닭? " + "".join(
+        f"<a class=whyc data-id='{nid}' data-why='{html.escape(w, quote=True)}'>{html.escape(w)}</a>"
+        for w in WHY_CHOICES) + "</div>")
+
+
 def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), child_of: str = "",
-             muted=frozenset()) -> str:
+             muted=frozenset(), whys=None) -> str:
     t = parse_ts(r.get("created_at", ""))
     when = t.astimezone(KST).strftime("%m-%d %H:%M") if t else ""
     real = parse_ts(r.get("published_real") or "")
@@ -1781,7 +1807,7 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
         + (f" <a class=sumbtn data-id='{r['id']}'>요약 ▾</a>" if r.get("summary_ko") else
            f" <a class=sumget data-id='{r['id']}' title='원문을 받아 Ollama 로 요약한다 (구글에 한 번 묻는다)'>요약 받기</a>"
            if "news.google.com" in r.get("url", "") and not r.get("summary_state") else "")
-        + f"{group}</div></td></tr>")
+        + f"{group}</div>{why_html(r['id'], state, (whys or {}).get(r['id'], ''))}</td></tr>")
 
 
 def week_page(watcher: Watcher) -> str:
@@ -1940,7 +1966,7 @@ def page_html(watcher: Watcher, rows: list, note: str, show_all: bool, low: int,
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1px solid #2a2d33;vertical-align:top}}
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
-.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} a.src{{cursor:pointer}} a.src:hover{{background:#4a2f33;color:#e6e6e6}} a.src.off{{text-decoration:line-through;opacity:.7}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.new td.t::before{{content:"● ";color:#8ab4f8}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
+.b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} a.src{{cursor:pointer}} a.src:hover{{background:#4a2f33;color:#e6e6e6}} a.src.off{{text-decoration:line-through;opacity:.7}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.new td.t::before{{content:"● ";color:#8ab4f8}} .whypick{{margin-top:3px;font-size:.86em;color:#d9918f}} .whypick a.whyc{{display:inline-block;margin:0 4px 2px 0;padding:0 7px;border-radius:10px;background:#3a2a2c;color:#e6c3c1;cursor:pointer}} .whypick a.whyc:hover{{background:#5a3a3d}} .whyset{{margin-top:2px;font-size:.8em;color:#8a9099}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
 #moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
 #recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} .pro{{color:#8fc79a}} .con{{color:#d9918f;margin-left:4px}} #upd:empty{{display:none}}
@@ -1982,7 +2008,7 @@ document.getElementById("reset-all").onclick = (e) => resetRecords("all",
 let keep = null, keepAt = 0;
 let limit = {PAGE_SIZE};   // '더 보기' 를 누를 때마다 늘어난다. 자동 갱신도 이만큼 받는다
 async function refresh() {{
-  if (keep && Date.now() - keepAt > 10000) keep = null;
+  if (keep && Date.now() - keepAt > 30000) keep = null;   // 👎 뒤 까닭을 고를 틈으로 30초
   const params = new URLSearchParams({json.dumps(dict([("all", "1")] * show_all + [("s", stock)] * bool(stock)))});
   if (limit > {PAGE_SIZE}) params.set("n", limit);
   if (keep) params.set("done", keep);
@@ -2053,6 +2079,14 @@ function applyOpen() {{
 
 // 👍/👎 는 페이지를 옮기지 않고 기록한다. 그래서 스크롤 위치가 그대로 남는다.
 document.getElementById("list").addEventListener("click", async (e) => {{
+  const wc = e.target.closest("a.whyc");
+  if (wc) {{   // 👎·🔕0 을 누른 까닭
+    await fetch("/fbwhy?" + new URLSearchParams({{id: wc.dataset.id, why: wc.dataset.why}}), {{cache: "no-store"}});
+    keep = wc.dataset.id;
+    keepAt = Date.now();
+    await refresh();
+    return;
+  }}
   const badge = e.target.closest("a.src");
   if (badge) {{   // 언론사 이름표: 목록에서 가리기 / 되살리기 (판별·알림은 그대로)
     const off = badge.dataset.off === "1";

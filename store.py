@@ -74,6 +74,8 @@ def con() -> sqlite3.Connection:
         for col, typ in (("published_real", "text"), ("stale", "int"), ("con", "text")):
             if col not in have:
                 c.execute(f"alter table judged add column {col} {typ}")
+        if "why" not in {r[1] for r in c.execute("pragma table_info(feedback)")}:
+            c.execute("alter table feedback add column why text")   # 👎·🔕0 을 누른 까닭 (고른 경우만)
         c.commit()
         _local.con = c
     return c
@@ -216,10 +218,15 @@ def add_feedback(rec: dict):
 
 def latest_feedback() -> dict:
     fb = {}
-    for r in con().execute('select id, title, "like", strong, at from feedback order by n'):
+    for r in con().execute('select id, title, "like", strong, at, why from feedback order by n'):
         fb[r["id"]] = {"id": r["id"], "title": r["title"], "like": None if r["like"] is None else bool(r["like"]),
-                       "strong": bool(r["strong"]), "at": r["at"]}
+                       "strong": bool(r["strong"]), "at": r["at"], "why": r["why"] or ""}
     return fb
+
+
+def set_why(nid: str, why: str):
+    """그 뉴스의 마지막 반응에 까닭을 적는다."""
+    _commit("update feedback set why = ? where n = (select max(n) from feedback where id = ?)", (why, nid))
 
 
 # ─────────────────────────────────────────────────────────────
