@@ -128,6 +128,10 @@ reason 과 con 은 점수와 상관없이 둘 다 쓴다. 점수가 높으면 re
 [과거 반응]의 🔔 는 "이런 뉴스는 반드시 알려라", 🔕 는 "이런 뉴스는 절대 알리지 마라"는 강한 표시다.
 🔔 와 같은 종류의 뉴스는 9~10점, 🔕 와 같은 종류는 0~1점을 줘라. 이것이 👍/👎 와 관심사보다 우선한다.
 
+[관찰 종목] 이 사람이 고른 종목이다. 모두 관심 종목이고 모두 상장돼 거래된다 (괄호는 야후 티커).
+"관심 종목 아님", "비상장사" 를 까닭으로 점수를 깎지 마라.
+{stocks}
+
 [관심사]
 {interests}
 
@@ -356,6 +360,7 @@ def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
     """({id: (score, reason, topic, say, ko, sum, con)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
     prompt = PROMPT.format(
         interests=INTERESTS.read_text(encoding="utf-8") if INTERESTS.exists() else "(없음)",
+        stocks=", ".join(f"{x['name']} ({x['yahoo']})" if x.get("yahoo") else x["name"] for x in load_stocks()) or "(없음)",
         examples=examples_text(cfg["examples"]),
         topics="\n".join(topics) or "(없음)",
         news="\n".join(f"{i}. {news_line(r)}" for i, r in enumerate(batch, 1)),
