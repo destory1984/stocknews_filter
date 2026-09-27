@@ -189,13 +189,20 @@ def source_stats() -> list:
 
 
 def judged_with_feedback() -> list:
-    """반응(뉴스마다 마지막 것, 취소는 뺌)을 받은 판별 기록: 제목, 점수, like, strong, 언제 판별했나."""
-    return [dict(r) for r in con().execute("""
+    """반응(뉴스마다 마지막 것, 취소는 뺌)을 받은 판별 기록: 제목, 점수, like, strong, 언제 판별했나.
+    늦게 받은 구글 기사를 지우며 옮긴 표(judged_bak_late_*)의 것도 센다 — 목록에서 뺀 것이지 채점까지 버린 것은 아니다.
+    처음부터 다시(reset) 할 때 옮긴 judged_bak_<시각> 표는 세지 않는다."""
+    c = con()
+    baks = [r[0] for r in c.execute("select name from sqlite_master where type='table' and name like 'judged_bak_late_%'")]
+    src = " union all ".join(["select id, title, title_ko, url, score, created_at from judged"]
+                             + [f"select id, title, title_ko, url, score, created_at from {b} "
+                                f"where id not in (select id from judged)" for b in baks])
+    return [dict(r) for r in c.execute(f"""
         select j.id, coalesce(nullif(j.title_ko, ''), j.title) title, j.url, j.score, j.created_at,
                f."like", f.strong
         from (select id, "like", strong from feedback
               where n in (select max(n) from feedback group by id)) f
-        join judged j on j.id = f.id
+        join ({src}) j on j.id = f.id
         where f."like" is not null
         order by j.created_at desc""")]
 
