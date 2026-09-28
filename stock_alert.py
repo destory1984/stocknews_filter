@@ -674,7 +674,10 @@ class Summarizer:
     def fetch_article(self, rec: dict, urgent: bool = False, why: str = ""):
         """원문 (본문, 처음 나온 시각). 구글이 막는 중이면 article.Busy.
         구글에 묻는 사이를 google_gap_sec 만큼 띄운다. urgent(알리기 전 날짜 보기)는 google_alert_gap_sec 만.
-        기다리는 동안 gate 를 쥐고 있지 않는다 — 요약이 3분 기다리는 사이 알림이 막히면 안 된다."""
+        기다리는 동안 gate 를 쥐고 있지 않는다 — 요약이 3분 기다리는 사이 알림이 막히면 안 된다.
+        article.NO_FETCH 언론사(무무)는 구글 링크도 풀지 않고 곧바로 Skip."""
+        if article.no_fetch(source=rec.get("source", "")):
+            raise article.Skip("원문 사이트가 자동 접속을 막음")
         gap = self.cfg["google_alert_gap_sec" if urgent else "google_gap_sec"]
         while True:
             with self.gate:

@@ -24,6 +24,20 @@ class Skip(Exception):
     """요약할 수 없는 기사 (robots.txt 가 막음, 본문 없음 등). 까닭은 str(e)."""
 
 
+# 원문을 받으러 가지 않는 사이트 (stocknews.source_key 로 적는다). 제목은 구글 RSS 로 받으니 판별·알림은 그대로 한다.
+# moomoo: 2026-09-28 알리기 전 날짜 보기로 요청 두 번(robots.txt, 기사)을 보낸 뒤 이 PC 에서 무무가
+# "Operations too frequent" 403 을 냈다. 막힘을 우회하지 않고 아예 가지 않는다.
+NO_FETCH = {"moomoo"}
+
+
+def no_fetch(source: str = "", url: str = "") -> bool:
+    """이 언론사 이름이나 원문 주소가 NO_FETCH 에 드는가."""
+    from stocknews import source_key
+    host = (urllib.parse.urlsplit(url).hostname or "") if url else ""
+    return source_key(source) in NO_FETCH or any(
+        host == f"{k}.com" or host.endswith(f".{k}.com") for k in NO_FETCH)
+
+
 class Busy(Exception):
     """구글이 요청이 많다며 막았다 (429, /sorry 페이지). 기사 탓이 아니니 나중에 다시 한다."""
 
@@ -130,6 +144,8 @@ def published(page: str):
 def fetch_body(url: str) -> tuple:
     """(원문 주소, 본문, 처음 나온 시각 또는 None). 막히거나 비었으면 Skip."""
     real = decode_google(url)
+    if no_fetch(url=real):
+        raise Skip("원문 사이트가 자동 접속을 막음")
     if not allowed(real):
         raise Skip("robots.txt 가 막음")
     r = requests.get(real, headers=HEADERS, timeout=TIMEOUT)
