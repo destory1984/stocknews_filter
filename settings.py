@@ -212,6 +212,36 @@ def menu(cfg: dict, stocks: list) -> str:
 </div>"""
 
 
+# 판별 목록 밖의 페이지(성적표·주간 리포트·목표가 표)에 붙이는 글자 크기 단추. 오른쪽 위에 떠 있다.
+# 판별 목록과 같은 localStorage "fs" 를 써서 한 곳에서 바꾸면 모든 페이지가 같이 바뀐다.
+# 페이지 body 는 font-size 를 var(--fs) 로, 안의 글자는 em 으로 적어야 따라 커진다.
+FS_BAR = """<style>
+:root{--fs:14px}
+.fszbar{position:fixed;top:10px;right:16px;z-index:5;display:inline-flex}
+.fszbar button{font:inherit;font-size:14px;border:1px solid #2e333b;background:#1c1f24;color:#e6e6e6;padding:2px 9px;cursor:pointer}
+.fszbar button:hover{background:#23272e} .fszbar button:disabled{opacity:.4;cursor:default}
+.fszbar button:first-child{border-radius:99px 0 0 99px;border-right:0} .fszbar button:last-child{border-radius:0 99px 99px 0}
+</style>
+<span class=fszbar><button id=fsdown title="글자 작게" aria-label="글자 작게">가-</button><button id=fsup title="글자 크게" aria-label="글자 크게">가+</button></span>
+<script>
+(function () {
+  const MIN = 11, MAX = 20, down = document.getElementById("fsdown"), up = document.getElementById("fsup");
+  let n = 14;
+  try { n = +localStorage.getItem("fs") || 14; } catch (err) {}
+  function set(v) {
+    n = Math.max(MIN, Math.min(MAX, v));
+    document.documentElement.style.setProperty("--fs", n + "px");
+    try { localStorage.setItem("fs", n); } catch (err) {}
+    down.disabled = n <= MIN; up.disabled = n >= MAX;
+    down.title = `글자 작게 · 지금 ${n}px`; up.title = `글자 크게 · 지금 ${n}px`;
+  }
+  down.onclick = () => set(n - 1);
+  up.onclick = () => set(n + 1);
+  set(n);
+})();
+</script>"""
+
+
 CSS = """
 :root{--fs:14px;--bg:#16181c;--panel:#1c1f24;--line:#2e333b;--text:#e6e6e6;--muted:#8a9099;--pos:#3cc47c;--neg:#f0605a;--down:#5b8ff0;--sel:#23272e;--input:#16181c}
 header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -271,7 +301,7 @@ function say(id, d, okText) {
   el.textContent = d.ok ? okText : d.msg;
 }
 
-// 글자 크기: 가- 가+  (이 브라우저에만 기억한다)
+// 글자 크기: 가- 가+  (이 브라우저에만 기억한다. 성적표·주간 리포트·목표가 표의 FS_BAR 와 같은 "fs" 를 쓴다)
 const FS_MIN = 11, FS_MAX = 20;
 let fontSize = 14;
 try { fontSize = +localStorage.getItem("fs") || 14; } catch (err) {}

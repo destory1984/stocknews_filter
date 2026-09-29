@@ -1714,7 +1714,7 @@ def sources_page(watcher: Watcher) -> str:
             f"<td data-v={r['up'] or 0}>{r['up'] or ''}</td><td data-v={r['down'] or 0}>{r['down'] or ''}</td></tr>")
     return f"""<!doctype html><meta charset=utf-8><title>성적표 · 종목 뉴스 필터</title>
 <style>
-body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
+body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px}}
 a{{color:#8ab4f8}} h2{{margin:0 0 4px;font-size:1.3em}} .why{{color:#8a9099;font-size:.86em}}
 table{{border-collapse:collapse}} th,td{{padding:4px 10px;border-bottom:1px solid #2a2d33;text-align:right}}
 th:nth-child(-n+2),td:nth-child(-n+2){{text-align:left}} th{{cursor:pointer;color:#b8bec6;font-weight:600;white-space:nowrap}}
@@ -1724,6 +1724,7 @@ tr.off button.hs{{background:#3a4a6b}}
 h3{{margin:18px 0 4px;font-size:1.1em}} table.g td,table.g th{{cursor:default}} ul.miss{{margin:4px 0;padding-left:20px}}
 ul.miss li{{margin:2px 0}} ul.miss a{{color:#e6e6e6;text-decoration:none}} ul.miss small{{color:#8a9099}}
 </style>
+{settings.FS_BAR}
 <p class=why><a href='/'>← 판별 목록</a></p>
 <h2>판별 채점</h2>
 {grading_html(watcher)}
@@ -1980,11 +1981,12 @@ def week_page(watcher: Watcher) -> str:
     topics = " · ".join(f"{html.escape(t)} {n}건" for t, n in r["topics"]) or "없음"
     return f"""<!doctype html><meta charset=utf-8><title>주간 리포트 · 종목 뉴스 필터</title>
 <style>
-body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:980px}}
+body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:980px}}
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
 h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
 .card ul{{margin:4px 0 0;padding-left:20px}} .card li{{margin:2px 0}} .card li.unsure{{opacity:.6}} .card .meta{{color:#8a9099;font-size:.86em;margin-right:4px}} .card .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} .card li small{{color:#e0a44a}} .back{{color:#8ab4f8}}
 </style>
+{settings.FS_BAR}
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>주간 리포트</h2>
 <p class=why>{(now - timedelta(days=7)):%m-%d} ~ {now:%m-%d %H:%M} · 판별한 뉴스 {r['news']}건 · 알림 {r['alerts']}건 ·
@@ -2061,7 +2063,7 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
     summary = " · ".join(f"{a} {count[a]}" for a in targets.ACTIONS if count.get(a)) or "아직 없음"
     return f"""<!doctype html><meta charset=utf-8><title>목표가 표 · 종목 뉴스 필터</title>
 <style>
-body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:1100px}}
+body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:1100px}}
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
 h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
 table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 3px 0;vertical-align:top;border-top:1px solid #2a2d33}}
@@ -2070,6 +2072,7 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
 </style>
+{settings.FS_BAR}
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>목표가 표</h2>
 <p class=sort>정렬: {sort}</p>
