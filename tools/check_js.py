@@ -10,7 +10,7 @@ import requests
 
 sys.stdout.reconfigure(encoding="utf-8")
 bad = 0
-for path in ("/", "/?all=1", "/?s=Micron", "/sources", "/week"):
+for path in ("/", "/?all=1", "/?s=Micron", "/sources", "/week", "/targets"):
     page = requests.get("http://127.0.0.1:18766" + path, timeout=90).text
     for i, js in enumerate(re.findall(r"<script>(.*?)</script>", page, re.S)):
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:

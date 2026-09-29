@@ -47,6 +47,7 @@ import moves
 import settings
 import stocknews
 import store
+import targets
 import weekly
 
 BASE = Path(__file__).resolve().parent
@@ -1287,10 +1288,51 @@ class Watcher:
         if recs:
             log(f"지난 영어 제목 {done}/{len(recs)}건 번역")
 
+    def targets_loop(self):
+        """목표가 뉴스에서 증권사·목표가를 뽑는다 (1분마다, 처음에는 지난 7일치를 채운다).
+        Ollama 로만 묻는다. 요약처럼 급하지 않아서, 꺼져 있으면 5분 뒤 다시 본다 (Claude 사용량을 아낀다)."""
+        tries = {}   # 뉴스 id → 모델이 답을 빠뜨린 횟수. 세 번이면 "목표가 뉴스 아님" 으로 적는다
+        down = False  # Ollama 가 꺼진 것을 한 번만 적는다 (게임하는 동안 5분마다 찍히지 않게)
+        while True:
+            try:
+                self.check_targets(tries)
+                down, wait = False, 60
+            except requests.RequestException as e:
+                if not down:
+                    log(f"🎯 목표가 뽑기: Ollama 에 못 물음 ({type(e).__name__}). 켜질 때까지 5분마다 다시 본다")
+                down, wait = True, 300
+            except Exception as e:
+                log(f"🎯 목표가 뽑기 오류: {type(e).__name__}: {str(e)[:120]}")
+                wait = 300
+            time.sleep(wait)
+
+    def check_targets(self, tries: dict, days: int = 7, size: int = 8, most: int = 3) -> int:
+        """아직 묻지 않은 목표가 뉴스 후보를 size 건씩 most 번까지 묻는다. 물어본 건수를 돌려준다."""
+        done = store.targets_checked()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        todo = sorted((r for r in list(self.judged.values())
+                       if r["id"] not in done and r.get("created_at", "") >= cutoff and targets.is_candidate(r)),
+                      key=lambda r: r.get("created_at", ""), reverse=True)[:size * most]
+        names = [s["name"] for s in load_stocks()]
+        for k in range(0, len(todo), size):
+            batch = todo[k:k + size]
+            got = targets.parse(ask_ollama(self.cfg, targets.build_prompt(batch, names), self.cfg["timeout_sec"]),
+                                batch, names)
+            for r in batch:
+                if r["id"] not in got:
+                    tries[r["id"]] = tries.get(r["id"], 0) + 1
+                    if tries[r["id"]] < 3:
+                        continue
+                store.save_targets(r["id"], got.get(r["id"], []))
+            n = sum(len(v) for v in got.values())
+            log(f"🎯 목표가 {n}건 뽑음 (뉴스 {len(batch)}건 중 {sum(1 for v in got.values() if v)}건이 목표가 뉴스)")
+        return len(todo)
+
     def run(self):
         log(f"감시 시작: {DATA}  (모델 {self.cfg['model']}, 기준 {self.cfg['threshold']}점, "
             f"RSS {self.cfg['fetch_min']}분마다)")
         threading.Thread(target=self.backfill_translations, daemon=True).start()
+        threading.Thread(target=self.targets_loop, daemon=True).start()
         while True:
             try:
                 self.step()
@@ -1351,6 +1393,8 @@ def make_handler(watcher: Watcher):
                 self.wfile.write(data)
             elif u.path == "/week":
                 self.send_page(week_page(watcher))
+            elif u.path == "/targets":
+                self.send_page(targets_page(watcher))
             elif u.path == "/sources":
                 self.send_page(sources_page(watcher))
             elif u.path == "/":
@@ -1950,6 +1994,78 @@ h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px
 {''.join(cards)}"""
 
 
+def money(v, cur: str) -> str:
+    """목표가 표시: $1,520 / $12.50 / 2,640,000원."""
+    if v is None:
+        return ""
+    s = f"{v:,.2f}" if v < 100 and v != int(v) else f"{v:,.0f}"
+    return {"USD": f"${s}", "KRW": f"{s}원"}.get(cur, f"{s} {cur}".strip())
+
+
+TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9be0", "의견하향": "#6c9be0",
+                 "신규": "#e0a44a", "유지": "#8a9099"}
+
+
+def targets_page(watcher: Watcher, days: int = 30) -> str:
+    """목표가 표: 최근 days 일, 최근에 조치가 나온 종목부터, 종목 안에서는 새것부터.
+    같은 조치를 여러 곳이 쓰면 한 줄 (targets.group)."""
+    now = datetime.now(timezone.utc)
+    rows = store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds"))
+    for r in rows:
+        r["at"] = parse_ts(r["created_at"])
+    by = {}
+    for r in rows:
+        if r["at"]:
+            by.setdefault(r["stock"], []).append(r)
+    stocks = load_stocks()
+    ticker = {s["name"]: s.get("yahoo", "") for s in stocks}
+    cards, count = [], {}
+    for name in sorted(by, key=lambda n: by[n][0]["at"], reverse=True):   # 최근에 조치가 나온 종목부터
+        lines = []
+        for g in targets.group(by[name]):
+            count[g["action"]] = count.get(g["action"], 0) + 1
+            k = g["at"].astimezone(KST)
+            pt = money(g["pt_new"], g["currency"])
+            if g["pt_old"] and g["pt_new"]:
+                pt = (f"{money(g['pt_old'], g['currency'])} → {pt} "
+                      f"<span class=pct>({(g['pt_new'] / g['pt_old'] - 1) * 100:+.1f}%)</span>")
+            links = "".join(f"<li><span class=src>{html.escape(SOURCE_NAMES.get(x['source'] or '', x['source'] or ''))}</span>"
+                            f"<a href=\"{html.escape(x['url'])}\" target=_blank>{html.escape(x['title_ko'] or x['title'])}</a></li>"
+                            for x in g["news"])
+            news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
+                    else f"<ul class=one>{links}</ul>")
+            lines.append(
+                f"<tr><td class=d>{k:%m-%d}({'월화수목금토일'[k.weekday()]})</td>"
+                f"<td class=br>{html.escape(g['broker'])}</td>"
+                f"<td><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
+                f"<td class=pt>{pt}</td><td class=rt>{html.escape(g['rating'])}</td>"
+                f"<td>{'🔔' if any(x['alerted'] for x in g['news']) else ''}</td><td class=nw>{news}</td></tr>")
+        cards.append(f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
+                     f" · {len(lines)}건</span></div><table>{''.join(lines)}</table></div>")
+    checked, week = store.targets_checked(), (now - timedelta(days=7)).isoformat(timespec="seconds")
+    todo = sum(1 for r in list(watcher.judged.values())
+               if r["id"] not in checked and r.get("created_at", "") >= week and targets.is_candidate(r))
+    empty = [s["name"] for s in stocks if s["name"] not in by]
+    summary = " · ".join(f"{a} {count[a]}" for a in targets.ACTIONS if count.get(a)) or "아직 없음"
+    return f"""<!doctype html><meta charset=utf-8><title>목표가 표 · 종목 뉴스 필터</title>
+<style>
+body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:1100px}}
+a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
+h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
+table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 3px 0;vertical-align:top;border-top:1px solid #2a2d33}}
+td.d,td.br,td.pt,td.rt{{white-space:nowrap}} td.d{{color:#8a9099;font-size:.9em}} td.nw{{width:100%;font-size:.9em}}
+.pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
+summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
+.back{{color:#8ab4f8}}
+</style>
+<p class=why><a class=back href='/'>← 판별 목록</a></p>
+<h2>목표가 표</h2>
+<p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
+같은 종목·증권사·구분·목표가를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
+{''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
+<p class=why>목표가 소식 없음: {html.escape(", ".join(empty)) or "없음"}</p>"""
+
+
 def spoken_when(at: datetime, now: datetime) -> str:
     """읽기 좋은 때: '내일 새벽 5시', '오늘 밤 9시 30분'."""
     day = {0: "오늘", 1: "내일", 2: "모레"}.get((at.date() - now.date()).days, f"{at.month}월 {at.day}일")
@@ -2078,7 +2194,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · <a href='/targets' style='text-decoration:underline'>목표가 표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {filt}
 {earnings_line()}
 {moves_html(watcher, stock)}

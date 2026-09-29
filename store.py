@@ -10,6 +10,7 @@ koreainvest 의 bars.db 와 같은 방식: WAL 로 열어 읽는 동안에도 �
   meta      옛 CSV·jsonl 을 옮겼는지 등
   moves     급등락 알림 (15분 변동, 그때 원인 후보로 붙인 뉴스)
   reactions 알림 뒤 1시간 주가 반응 (change 가 null 이면 장이 닫혀 있었거나 티커가 없다)
+  targets   목표가·투자의견 뉴스에서 뽑은 증권사·구분·목표가 (/targets 페이지)
 """
 import csv
 import json
@@ -49,6 +50,10 @@ create table if not exists feedback (
 create table if not exists meta (k text primary key, v text);
 create table if not exists reactions (
     id text primary key, ticker text, alert_at text, p0 real, p1 real, change real, note text, checked_at text);
+create table if not exists targets (          -- 목표가·투자의견 뉴스에서 뽑은 것 (targets.py)
+    id text, n int,                            -- 뉴스 id, 그 뉴스 안의 순번. n = -1 은 "물어봤더니 목표가 뉴스 아님"
+    stock text, broker text, action text, rating text, pt_old real, pt_new real, currency text, checked_at text,
+    primary key (id, n));
 create table if not exists moves (
     n integer primary key autoincrement, at text, ticker text, name text,
     change real, price real, news text);     -- news: 원인 후보 [{title, url, score}] JSON
@@ -293,6 +298,30 @@ def add_reaction(nid: str, ticker: str, alert_at: str, res, note: str = ""):
 def reactions() -> dict:
     """{뉴스 id: {ticker, change, note}}"""
     return {r["id"]: dict(r) for r in con().execute("select id, ticker, change, note from reactions")}
+
+
+def targets_checked() -> set:
+    """목표가를 뽑으려고 이미 물어본 뉴스 id."""
+    return {r[0] for r in con().execute("select distinct id from targets")}
+
+
+def save_targets(nid: str, items: list):
+    """한 뉴스에서 뽑은 목표가들. 빈 목록이면 '목표가 뉴스 아님' 한 줄(n=-1)을 적어 다시 묻지 않는다."""
+    at = datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds")
+    rows = [(nid, n, x["stock"], x["broker"], x["action"], x["rating"], x["pt_old"], x["pt_new"], x["currency"], at)
+            for n, x in enumerate(items)] or [(nid, -1, None, None, None, None, None, None, None, at)]
+    with _write:
+        c = con()
+        c.execute("delete from targets where id=?", (nid,))
+        c.executemany("insert into targets values (?,?,?,?,?,?,?,?,?,?)", rows)
+        c.commit()
+
+
+def read_targets(since: str) -> list:
+    """since(ISO) 뒤에 나온 뉴스에서 뽑은 목표가, 새것부터. 뉴스 제목·링크·언론사·알림 여부를 붙인다."""
+    return [dict(r) for r in con().execute(
+        "select t.*, j.title, j.title_ko, j.url, j.source, j.created_at, j.alerted, j.score from targets t "
+        "join judged j on j.id = t.id where t.n >= 0 and j.created_at >= ? order by j.created_at desc", (since,))]
 
 
 def reset(what: str) -> list:
