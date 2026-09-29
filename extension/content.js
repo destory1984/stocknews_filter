@@ -1,6 +1,8 @@
 // MarketBeat "오늘의 목표가 변경" 표를 읽어 종목 뉴스 필터로 넘긴다.
-// 사용자가 브라우저에 띄워 둔 탭에서만 돈다. 5분마다 페이지를 새로 고친다.
-const RELOAD_MIN = 5;
+// 사용자가 브라우저에 띄워 둔 탭에서만 돈다. 15분마다 페이지를 새로 고친다.
+// 5분마다 고치던 09-28 새벽, MarketBeat 광고 페이지("Thank you for visiting")로 넘어간 뒤 확장이 멈췄다.
+// 광고 페이지는 이 스크립트가 돌지 않는 주소라 넘어가기를 누르지 않고, 알리미 목록에 "멈춤" 을 띄운다
+const RELOAD_MIN = 15;
 
 function cellClean(td) {
   return (td && (td.getAttribute("data-clean") || td.getAttribute("data-sort-value") || td.textContent) || "").trim();
@@ -64,7 +66,7 @@ async function run() {
       badge(`종목 뉴스 필터에 넘기지 못함: ${e.message} (${now})`, false);
     }
   }
-  // 조금씩 흩어 새로 고친다 (5분 ± 20초)
+  // 조금씩 흩어 새로 고친다 (15분 ± 20초)
   setTimeout(() => location.reload(), RELOAD_MIN * 60000 + (Math.random() - 0.5) * 40000);
 }
 

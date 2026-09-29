@@ -238,8 +238,12 @@ saveticker_filter 와 같다.
 접속하는 것을 금하므로, 서버에서 페이지를 받지 않고 **사용자가 Edge 에 띄워 둔 탭을 확장이 읽는다.**
 
 1. `edge://extensions` → 개발자 모드 → 압축 풀린 파일 로드 → `extension` 폴더.
-2. Edge 에 https://www.marketbeat.com/ratings/ (또는 /ratings/us/) 를 열어 둔다. 확장이 5분마다 새로 고치고, 표를 알리미(18766)로 넘긴다.
+2. Edge 에 https://www.marketbeat.com/ratings/ (또는 /ratings/us/) 를 열어 둔다. 확장이 15분마다 새로 고치고, 표를 알리미(18766)로 넘긴다.
    오른쪽 아래 초록 딱지에 넘긴 줄 수가 나온다.
+   - MarketBeat 가 가끔 광고 페이지("Thank you for visiting")를 끼워 넣는다. 그 페이지에서는 확장이 돌지 않아 측정이 멈춘다.
+     5분마다 새로 고칠 때 한 번 걸려 이틀 넘게 멈췄다.
+   - 30분 넘게 표가 안 오면 판별 목록 위에 "MarketBeat 측정이 N시간째 멈춤" 이 뜬다. 광고를 건너뛰어 목표가 페이지로 돌려 두면 된다.
+   - 광고의 건너뛰기를 확장이 대신 누르지는 않는다.
 3. 새 줄이 처음 보인 시각이 `data/stocknews.db` 의 `mb_ratings` 에 쌓인다. `python mb_report.py` 로 본다.
 
 MarketBeat 페이지에는 줄마다 올라온 시각이 없고, 페이지 밑에 Benzinga 등에서 받은 자료라고 적혀 있다. 그래서 직접 재 본다.

@@ -2120,6 +2120,22 @@ RECENT_ALERT_HOURS = 6
 RECENT_ALERT_MAX = 5
 
 
+def mb_stall_html() -> str:
+    """MarketBeat 측정이 30분 넘게 멈췄으면 경고 한 줄. 30일 넘게 안 썼으면 접은 것으로 보고 띄우지 않는다.
+    09-28 새벽 확장이 5분마다 새로 고치다 MarketBeat 광고 페이지("Thank you for visiting")에 걸려 이틀 넘게 멈춘 일이 있다.
+    광고 페이지는 주소가 달라 확장이 돌지 않으므로 확장 쪽에서는 알 수 없다."""
+    last = parse_ts(store.mb_last())
+    if not last:
+        return ""
+    age = datetime.now(timezone.utc) - last
+    if not timedelta(minutes=30) < age < timedelta(days=30):
+        return ""
+    h = age.total_seconds() / 3600
+    ago = f"{h:.0f}시간" if h >= 1 else f"{age.total_seconds() / 60:.0f}분"
+    return (f"<p class=warn>MarketBeat 측정이 {ago}째 멈춤 (마지막 {last.astimezone(KST):%m-%d %H:%M}). "
+            f"Edge 의 MarketBeat 탭이 광고 페이지에 서 있으면 건너뛰어 목표가 페이지(/ratings/us/)로 돌려 주세요.</p>")
+
+
 def recent_alerts_html(watcher: Watcher) -> str:
     """목록 위 '최근 알림': 알림을 보낸 뉴스를 알린 순서대로. 목록은 기사 시각 순이라,
     늦게 들어와 알린 뉴스는 목록 아래에 묻힌다 (PC 가 잠들었다 깼을 때, 구글이 늦게 올린 기사)."""
@@ -2239,6 +2255,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 {filt}
 {earnings_line()}
 {moves_html(watcher, stock)}
+{mb_stall_html()}
 {recent_alerts_html(watcher)}
 {note}<p class=why id=upd></p><table id=list>{''.join(rows)}</table>
 <p class="why reset">처음부터 다시 ·

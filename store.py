@@ -97,6 +97,12 @@ def _commit(sql: str, args=(), many=False) -> int:
         return cur.rowcount
 
 
+def mb_last() -> str:
+    """확장이 MarketBeat 표를 마지막으로 보낸 시각 (ISO, UTC). 한 번도 없으면 ""."""
+    row = con().execute("select max(last_seen) from mb_ratings").fetchone()
+    return row[0] or "" if row else ""
+
+
 def get_meta(k: str, default: str = "") -> str:
     row = con().execute("select v from meta where k=?", (k,)).fetchone()
     return row[0] if row else default
