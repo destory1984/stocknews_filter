@@ -2007,7 +2007,7 @@ TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9
 
 
 def targets_page(watcher: Watcher, days: int = 30) -> str:
-    """목표가 표: 최근 days 일, 최근에 조치가 나온 종목부터, 종목 안에서는 새것부터.
+    """목표가 표: 최근 days 일, 종목은 이름 순, 종목 안에서는 새것부터.
     같은 조치를 여러 곳이 쓰면 한 줄 (targets.group)."""
     now = datetime.now(timezone.utc)
     rows = store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds"))
@@ -2020,7 +2020,7 @@ def targets_page(watcher: Watcher, days: int = 30) -> str:
     stocks = load_stocks()
     ticker = {s["name"]: s.get("yahoo", "") for s in stocks}
     cards, count = [], {}
-    for name in sorted(by, key=lambda n: by[n][0]["at"], reverse=True):   # 최근에 조치가 나온 종목부터
+    for name in sorted(by, key=str.lower):   # 이름 순 (영어 A→Z 다음 한국 종목, 09-29 전하 분부)
         lines = []
         for g in targets.group(by[name]):
             count[g["action"]] = count.get(g["action"], 0) + 1
