@@ -97,19 +97,31 @@ def parse(text: str, recs: list, stocks: list) -> dict:
     return out
 
 
+# 뒤 꼬리를 떼고도 남는 이름 갈래 (09-29 뽑은 71건에서 본 것)
+BROKER_ALIAS = {"jpmorganchase": "jpmorgan", "royalbankofcanada": "rbc", "bankofamerica": "bofa",
+                "sanfordcbernstein": "bernstein", "citigroup": "citi"}
+
+
 def broker_key(name: str) -> str:
-    """같은 증권사의 이름 갈래를 합친다: "Morgan Stanley" / "morgan stanley" / "Morgan Stanley & Co."."""
+    """같은 증권사의 이름 갈래를 합친다: "JPMorgan" / "J.P. Morgan" / "JPMorgan Chase & Co.",
+    "Citi" / "Citigroup", "RBC Capital" / "Royal Bank Of Canada", "DS투자증권" / "DS투자證"."""
     s = re.sub(r"[^\w]", "", (name or "").lower())
-    return re.sub(r"(securities|capital|group|co|inc|llc|증권|투자증권)$", "", s) or s
+    while True:
+        t = re.sub(r"(securities|capital|markets|group|co|inc|llc|투자증권|증권|證)$", "", s)
+        if t == s or not t:
+            break
+        s = t
+    return BROKER_ALIAS.get(s, s)
 
 
 def group(rows: list, days: int = 2) -> list:
-    """같은 종목·같은 증권사·같은 구분·같은 목표가가 days 일 안에 여러 기사로 오면 한 줄로 합친다.
+    """같은 종목·같은 증권사의 조치가 days 일 안에 여러 기사로 오면 한 줄로 합친다 (목표가가 다르면 따로).
     rows 는 새것부터, 각 줄에 at(datetime) 이 있어야 한다. 합친 줄의 news 에 기사들이 들어간다.
-    목표가를 제목에 안 적은 기사("DS, 하이닉스 목표가 낮춰")는 같은 조치의 목표가 적힌 기사와 합친다."""
+    목표가를 제목에 안 적은 기사("DS, 하이닉스 목표가 낮춰")는 같은 조치의 목표가 적힌 기사와 합친다.
+    구분은 기사들 가운데 가장 많은 것을 쓴다. 모델이 "Baird Sets $1,520 Target" 을 "신규" 로 잘못 붙이는 일이 있어서다."""
     out = []
     for r in rows:
-        key = (r["stock"], broker_key(r["broker"]), r["action"])
+        key = (r["stock"], broker_key(r["broker"]))
         for g in out:
             if (g["key"] == key and g["at"] - r["at"] <= timedelta(days=days)
                     and (g["pt_new"] is None or r["pt_new"] is None or g["pt_new"] == r["pt_new"])):
@@ -119,4 +131,7 @@ def group(rows: list, days: int = 2) -> list:
                 break
         else:
             out.append(dict(r, key=key, news=[r]))
+    for g in out:
+        acts = [x["action"] for x in g["news"]]
+        g["action"] = max(dict.fromkeys(acts), key=acts.count)   # 같은 수면 새 기사 쪽
     return out
