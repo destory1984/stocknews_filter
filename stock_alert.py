@@ -267,6 +267,28 @@ def same_event(topic_a: str, tickers_a: str, topic_b: str, tickers_b: str) -> bo
     return bool(words(topic_a) & words(topic_b))
 
 
+# 사건 이름에 흔히 붙는 넓은 말. 여러 곳 보도를 셀 때는 이 말만 겹쳐서는 같은 사건으로 치지 않는다.
+# 09-28 "삼성전자 AI 메모리" 50곳 가운데 48곳이 "삼성전자 AI 구독" 이었다 ("AI" 가 겹침)
+BROAD_WORDS = {"AI", "주가", "시세", "시황", "동향", "전망", "분석", "논쟁", "소식", "이슈", "뉴스"}
+
+
+def company_word(w: str, names: list) -> bool:
+    """사건 이름 낱말이 관찰 종목 이름·키워드인가 ("삼성 하이닉스 시세" 의 "하이닉스")."""
+    w = w.lower()
+    return len(w) >= 2 and any(w in k or k in w for k in names)
+
+
+def buzz_event(topic_a: str, tickers_a: str, topic_b: str, tickers_b: str, names: list = ()) -> bool:
+    """여러 곳 보도를 셀 때의 같은 사건. same_event 보다 좁다: 종목이 겹치고, 이름이 같거나
+    넓은 말(BROAD_WORDS)이 아닌 낱말이 겹쳐야 한다. "엔비디아 주가", "삼성 하이닉스 시세" 처럼
+    넓은 말뿐인 이름은 서로 다른 기사를 한데 묶으므로 아예 세지 않는다. names(소문자 종목 이름·키워드)에 든 낱말도 넓은 말로 친다."""
+    if not topic_a or not topic_b or not same_event(topic_a, tickers_a, topic_b, tickers_b):
+        return False
+    words = lambda t: {w for w in t.split()[1:] if w not in BROAD_WORDS and not company_word(w, names)}
+    wa = words(topic_a)
+    return bool(wa) and (topic_a == topic_b or bool(wa & words(topic_b)))
+
+
 def news_line(r: dict) -> str:
     t = r["title"]
     if r.get("title_en") and r["title_en"] != t:
@@ -936,8 +958,11 @@ class Watcher:
 
     def outlets(self, topic: str, tickers: str, source: str = "") -> int:
         """6시간 안에 같은 사건(same_event)을 쓴 언론사 수 (이름 갈래는 합쳐 센다). source 는 지금 판별하는 뉴스의 것."""
+        names = [k.lower() for s in load_stocks() for k in [s["name"], *s.get("keywords", [])]]
         keys = {stocknews.source_key(r.get("source", "")) for r in self.recent(6)
-                if same_event(topic, tickers, r.get("topic", ""), r.get("tickers", ""))}
+                if buzz_event(topic, tickers, r.get("topic", ""), r.get("tickers", ""), names)}
+        if not keys:
+            return 0
         return len((keys | {stocknews.source_key(source)}) - {""})
 
     def topic_alerted(self, topic: str, tickers: str) -> bool:
@@ -2005,7 +2030,7 @@ def money(v, cur: str) -> str:
 
 
 TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9be0", "의견하향": "#6c9be0",
-                 "신규": "#e0a44a", "유지": "#8a9099"}
+                 "신규": "#e0a44a", "유지": "#8a9099", "제시": "#8a9099"}
 
 
 def target_row(g: dict, stock: str = "") -> str:
@@ -2077,7 +2102,7 @@ summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:
 <h2>목표가 표</h2>
 <p class=sort>정렬: {sort}</p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
-같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것).{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
+같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
 <p class=why>목표가 소식 없음: {html.escape(", ".join(empty)) or "없음"}</p>"""
 

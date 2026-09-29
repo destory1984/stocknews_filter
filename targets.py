@@ -14,7 +14,8 @@ CANDIDATE = re.compile(
     r"outperform|underperform|overweight|underweight|목표가|목표주가|투자의견|커버리지|매수 의견|매수의견",
     re.I)
 
-ACTIONS = ("상향", "하향", "유지", "신규", "의견상향", "의견하향")
+# "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지·처음인지 제목으로 알 수 없는 것
+ACTIONS = ("상향", "하향", "유지", "신규", "의견상향", "의견하향", "제시")
 
 PROMPT = """아래 뉴스 제목에서 증권사·애널리스트의 목표가·투자의견 조치를 뽑아라.
 
@@ -29,6 +30,9 @@ PROMPT = """아래 뉴스 제목에서 증권사·애널리스트의 목표가·
 - action: 목표가를 올렸으면 "상향", 내렸으면 "하향", 목표가를 그대로 두거나 의견만 재확인하면 "유지",
   처음 분석을 시작하면 "신규", 목표가 변화 없이 의견만 올리면 "의견상향", 내리면 "의견하향".
   의견을 유지하면서 목표가를 올리면 "상향" 이다.
+  "신규" 는 제목에 initiates, begins/starts coverage, 커버리지 개시, 신규 분석 같은 말이 있을 때만 쓴다.
+  "Baird Sets $1,520 Target", "목표가 56만원", "RBC analyst says" 처럼 목표가·의견만 있고 올렸는지·내렸는지·
+  처음인지 제목으로 알 수 없으면 "제시".
 - rating: 투자의견을 한국어 짧은 말로 (매수, 비중확대, 아웃퍼폼, 중립, 보유, 매도 등). 제목에 없으면 "".
 - old, new: 제목에 적힌 목표가 숫자만 쓴다 (쉼표 없이). 제목에 없으면 null. 짐작해서 만들지 마라.
 - cur: 목표가 통화 (USD, KRW 등). 목표가가 없으면 "".
@@ -99,7 +103,13 @@ def parse(text: str, recs: list, stocks: list) -> dict:
 
 # 뒤 꼬리를 떼고도 남는 이름 갈래 (09-29 뽑은 71건에서 본 것)
 BROKER_ALIAS = {"jpmorganchase": "jpmorgan", "royalbankofcanada": "rbc", "bankofamerica": "bofa",
-                "sanfordcbernstein": "bernstein", "citigroup": "citi"}
+                "sanfordcbernstein": "bernstein", "citigroup": "citi",
+                # 한국어 제목에 나오는 외국 증권사 (09-30 "번스타인, SK하이닉스 목표주가 하향")
+                "번스타인": "bernstein", "골드만삭스": "goldmansachs", "모건스탠리": "morganstanley",
+                "jp모건": "jpmorgan", "제이피모건": "jpmorgan", "씨티": "citi", "bofa": "bofa",
+                "뱅크오브아메리카": "bofa", "맥쿼리": "macquarie", "노무라": "nomura", "ubs": "ubs",
+                "제프리스": "jefferies", "바클레이즈": "barclays", "도이치": "deutsche", "도이체방크": "deutsche",
+                "도이치방크": "deutsche", "deutschebank": "deutsche", "hsbc": "hsbc", "clsa": "clsa"}
 
 
 def broker_key(name: str) -> str:
@@ -133,5 +143,6 @@ def group(rows: list, days: int = 2) -> list:
             out.append(dict(r, key=key, news=[r]))
     for g in out:
         acts = [x["action"] for x in g["news"]]
+        acts = [a for a in acts if a != "제시"] or acts   # 방향을 아는 기사가 하나라도 있으면 그쪽
         g["action"] = max(dict.fromkeys(acts), key=acts.count)   # 같은 수면 새 기사 쪽
     return out
