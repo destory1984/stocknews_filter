@@ -1394,7 +1394,7 @@ def make_handler(watcher: Watcher):
             elif u.path == "/week":
                 self.send_page(week_page(watcher))
             elif u.path == "/targets":
-                self.send_page(targets_page(watcher))
+                self.send_page(targets_page(watcher, q.get("o", "")))
             elif u.path == "/sources":
                 self.send_page(sources_page(watcher))
             elif u.path == "/":
@@ -2006,9 +2006,29 @@ TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9
                  "신규": "#e0a44a", "유지": "#8a9099"}
 
 
-def targets_page(watcher: Watcher, days: int = 30) -> str:
-    """목표가 표: 최근 days 일, 종목은 이름 순, 종목 안에서는 새것부터.
-    같은 조치를 여러 곳이 쓰면 한 줄 (targets.group)."""
+def target_row(g: dict, stock: str = "") -> str:
+    """목표가 표 한 줄. stock 을 주면(최신순 보기) 날짜에 시각을 붙이고 종목 칸을 넣는다."""
+    k = g["at"].astimezone(KST)
+    pt = money(g["pt_new"], g["currency"])
+    if g["pt_old"] and g["pt_new"] and g["pt_old"] != g["pt_new"]:
+        pt = (f"{money(g['pt_old'], g['currency'])} → {pt} "
+              f"<span class=pct>({(g['pt_new'] / g['pt_old'] - 1) * 100:+.1f}%)</span>")
+    links = "".join(f"<li><span class=src>{html.escape(SOURCE_NAMES.get(x['source'] or '', x['source'] or ''))}</span>"
+                    f"<a href=\"{html.escape(x['url'])}\" target=_blank>{html.escape(x['title_ko'] or x['title'])}</a></li>"
+                    for x in g["news"])
+    news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
+            else f"<ul class=one>{links}</ul>")
+    return (f"<tr><td class=d>{k:%m-%d}({'월화수목금토일'[k.weekday()]}){f' {k:%H:%M}' if stock else ''}</td>"
+            + (f"<td class=sk>{html.escape(stock)}</td>" if stock else "")
+            + f"<td class=br>{html.escape(g['broker'])}</td>"
+            f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
+            f"<td class=pt>{pt}</td><td class=rt>{html.escape(g['rating'])}</td>"
+            f"<td class=bl>{'🔔' if any(x['alerted'] for x in g['news']) else ''}</td><td class=nw>{news}</td></tr>")
+
+
+def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
+    """목표가 표: 최근 days 일. 같은 조치를 여러 곳이 쓰면 한 줄 (targets.group).
+    order "" 는 종목마다 칸을 나눠 이름 순 (영어 A→Z 다음 한국 종목), "new" 는 모든 종목을 한 표에 최신순 (09-29 전하 분부)."""
     now = datetime.now(timezone.utc)
     rows = store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds"))
     for r in rows:
@@ -2019,29 +2039,21 @@ def targets_page(watcher: Watcher, days: int = 30) -> str:
             by.setdefault(r["stock"], []).append(r)
     stocks = load_stocks()
     ticker = {s["name"]: s.get("yahoo", "") for s in stocks}
-    cards, count = [], {}
-    for name in sorted(by, key=str.lower):   # 이름 순 (영어 A→Z 다음 한국 종목, 09-29 전하 분부)
-        lines = []
-        for g in targets.group(by[name]):
+    groups = {name: targets.group(rs) for name, rs in by.items()}
+    count = {}
+    for gs in groups.values():
+        for g in gs:
             count[g["action"]] = count.get(g["action"], 0) + 1
-            k = g["at"].astimezone(KST)
-            pt = money(g["pt_new"], g["currency"])
-            if g["pt_old"] and g["pt_new"] and g["pt_old"] != g["pt_new"]:
-                pt = (f"{money(g['pt_old'], g['currency'])} → {pt} "
-                      f"<span class=pct>({(g['pt_new'] / g['pt_old'] - 1) * 100:+.1f}%)</span>")
-            links = "".join(f"<li><span class=src>{html.escape(SOURCE_NAMES.get(x['source'] or '', x['source'] or ''))}</span>"
-                            f"<a href=\"{html.escape(x['url'])}\" target=_blank>{html.escape(x['title_ko'] or x['title'])}</a></li>"
-                            for x in g["news"])
-            news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
-                    else f"<ul class=one>{links}</ul>")
-            lines.append(
-                f"<tr><td class=d>{k:%m-%d}({'월화수목금토일'[k.weekday()]})</td>"
-                f"<td class=br>{html.escape(g['broker'])}</td>"
-                f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
-                f"<td class=pt>{pt}</td><td class=rt>{html.escape(g['rating'])}</td>"
-                f"<td class=bl>{'🔔' if any(x['alerted'] for x in g['news']) else ''}</td><td class=nw>{news}</td></tr>")
-        cards.append(f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
-                     f" · {len(lines)}건</span></div><table>{''.join(lines)}</table></div>")
+    if order == "new":
+        flat = sorted(((g, name) for name, gs in groups.items() for g in gs), key=lambda x: x[0]["at"], reverse=True)
+        cards = ([f"<div class=card><table>{''.join(target_row(g, name) for g, name in flat)}</table></div>"]
+                 if flat else [])
+    else:
+        cards = [f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
+                 f" · {len(groups[name])}건</span></div><table>{''.join(target_row(g) for g in groups[name])}</table></div>"
+                 for name in sorted(groups, key=str.lower)]
+    sort = " · ".join(f"<b>{label}</b>" if order == o else f"<a class=back href='/targets{'?o=' + o if o else ''}'>{label}</a>"
+                      for o, label in (("", "종목 이름 순"), ("new", "최신순")))
     checked, week = store.targets_checked(), (now - timedelta(days=7)).isoformat(timespec="seconds")
     todo = sum(1 for r in list(watcher.judged.values())
                if r["id"] not in checked and r.get("created_at", "") >= week and targets.is_candidate(r))
@@ -2053,13 +2065,14 @@ body{{font:15px system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16p
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
 h2{{margin:0 0 4px;font-size:1.3em}} .card{{background:#1f2228;border-radius:8px;padding:8px 12px;margin:8px 0}}
 table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 3px 0;vertical-align:top;border-top:1px solid #2a2d33}}
-td.d,td.br,td.ac,td.pt,td.rt,td.bl{{white-space:nowrap}} td.d{{color:#8a9099;font-size:.9em;min-width:5.5em}} td.br{{min-width:9em}} td.ac{{min-width:4.5em}} td.pt{{min-width:13em}} td.rt{{min-width:5em}} td.bl{{min-width:1.5em}} td.nw{{width:100%;font-size:.9em}}
+.sort{{margin:4px 0}} td.sk{{white-space:nowrap;font-weight:600;min-width:8em}} td.d,td.br,td.ac,td.pt,td.rt,td.bl{{white-space:nowrap}} td.d{{color:#8a9099;font-size:.9em;min-width:5.5em}} td.br{{min-width:9em}} td.ac{{min-width:4.5em}} td.pt{{min-width:13em}} td.rt{{min-width:5em}} td.bl{{min-width:1.5em}} td.nw{{width:100%;font-size:.9em}}
 .pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
 </style>
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>목표가 표</h2>
+<p class=sort>정렬: {sort}</p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것).{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
