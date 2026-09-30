@@ -48,6 +48,7 @@ import settings
 import stocknews
 import store
 import targets
+import targets_db
 import weekly
 
 BASE = Path(__file__).resolve().parent
@@ -1338,17 +1339,22 @@ class Watcher:
         todo = sorted((r for r in list(self.judged.values())
                        if r["id"] not in done and r.get("created_at", "") >= cutoff and targets.is_candidate(r)),
                       key=lambda r: r.get("created_at", ""), reverse=True)[:size * most]
-        names = [s["name"] for s in load_stocks()]
+        stocks = load_stocks()
+        names = [s["name"] for s in stocks]
+        ticker = {s["name"]: s.get("yahoo", "") for s in stocks}   # saveticker 쪽 기록과 티커로 맞춘다
         for k in range(0, len(todo), size):
             batch = todo[k:k + size]
             got = targets.parse(ask_ollama(self.cfg, targets.build_prompt(batch, names), self.cfg["timeout_sec"]),
                                 batch, names)
+            for items in got.values():
+                for x in items:
+                    x["ticker"] = ticker.get(x["stock"], "")
             for r in batch:
                 if r["id"] not in got:
                     tries[r["id"]] = tries.get(r["id"], 0) + 1
                     if tries[r["id"]] < 3:
                         continue
-                store.save_targets(r["id"], got.get(r["id"], []))
+                store.save_targets(r, got.get(r["id"], []))
             n = sum(len(v) for v in got.values())
             log(f"🎯 목표가 {n}건 뽑음 (뉴스 {len(batch)}건 중 {sum(1 for v in got.values() if v)}건이 목표가 뉴스)")
         return len(todo)
@@ -1357,6 +1363,9 @@ class Watcher:
         log(f"감시 시작: {DATA}  (모델 {self.cfg['model']}, 기준 {self.cfg['threshold']}점, "
             f"RSS {self.cfg['fetch_min']}분마다)")
         threading.Thread(target=self.backfill_translations, daemon=True).start()
+        moved = store.move_targets_to_shared({s["name"]: s.get("yahoo", "") for s in load_stocks()})
+        if moved:
+            log(f"🎯 목표가 기록 {moved}건을 공용 DB 로 옮김 ({targets_db.PATH})")
         threading.Thread(target=self.targets_loop, daemon=True).start()
         while True:
             try:
@@ -2057,14 +2066,19 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
     """목표가 표: 최근 days 일. 같은 조치를 여러 곳이 쓰면 한 줄 (targets.group).
     order "" 는 종목마다 칸을 나눠 이름 순 (영어 A→Z 다음 한국 종목), "new" 는 모든 종목을 한 표에 최신순 (09-29 전하 분부)."""
     now = datetime.now(timezone.utc)
-    rows = store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds"))
-    for r in rows:
-        r["at"] = parse_ts(r["created_at"])
+    stocks = load_stocks()
+    # 공용 DB 에는 saveticker 가 뽑은 모든 회사가 있다. 관찰 종목만, 이름은 이쪽 이름으로 (티커로 맞춘다)
+    by_ticker = {targets_db.ticker_key(s.get("yahoo", "")): s["name"] for s in stocks if s.get("yahoo")}
+    by_name = {s["name"].lower(): s["name"] for s in stocks}
+    rows = []
+    for r in store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds")):
+        name = by_ticker.get(r["ticker"] or "") or by_name.get((r["stock"] or "").lower())
+        if name:
+            rows.append(dict(r, stock=name, at=parse_ts(r["created_at"])))
     by = {}
     for r in rows:
         if r["at"]:
             by.setdefault(r["stock"], []).append(r)
-    stocks = load_stocks()
     ticker = {s["name"]: s.get("yahoo", "") for s in stocks}
     groups = {name: targets.group(rs) for name, rs in by.items()}
     count = {}

@@ -19,6 +19,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import targets_db
+
 BASE = Path(__file__).resolve().parent
 DB = BASE / "data" / "stocknews.db"
 
@@ -306,28 +308,37 @@ def reactions() -> dict:
     return {r["id"]: dict(r) for r in con().execute("select id, ticker, change, note from reactions")}
 
 
+# 목표가는 saveticker 와 함께 쓰는 공용 DB(targets_db) 에 적는다 (09-30). 이 DB 의 targets 표는 옮기기 전 기록으로 남는다
 def targets_checked() -> set:
     """목표가를 뽑으려고 이미 물어본 뉴스 id."""
-    return {r[0] for r in con().execute("select distinct id from targets")}
+    return targets_db.checked("stocknews")
 
 
-def save_targets(nid: str, items: list):
-    """한 뉴스에서 뽑은 목표가들. 빈 목록이면 '목표가 뉴스 아님' 한 줄(n=-1)을 적어 다시 묻지 않는다."""
-    at = datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds")
-    rows = [(nid, n, x["stock"], x["broker"], x["action"], x["rating"], x["pt_old"], x["pt_new"], x["currency"], at)
-            for n, x in enumerate(items)] or [(nid, -1, None, None, None, None, None, None, None, at)]
-    with _write:
-        c = con()
-        c.execute("delete from targets where id=?", (nid,))
-        c.executemany("insert into targets values (?,?,?,?,?,?,?,?,?,?)", rows)
-        c.commit()
+def save_targets(rec: dict, items: list):
+    """한 뉴스(판별 기록)에서 뽑은 목표가들. 빈 목록이면 '목표가 뉴스 아님' 으로 적어 다시 묻지 않는다."""
+    targets_db.save("stocknews", rec, items)
 
 
 def read_targets(since: str) -> list:
-    """since(ISO) 뒤에 나온 뉴스에서 뽑은 목표가, 새것부터. 뉴스 제목·링크·언론사·알림 여부를 붙인다."""
-    return [dict(r) for r in con().execute(
-        "select t.*, j.title, j.title_ko, j.url, j.source, j.created_at, j.alerted, j.score from targets t "
-        "join judged j on j.id = t.id where t.n >= 0 and j.created_at >= ? order by j.created_at desc", (since,))]
+    """since(ISO) 뒤에 나온 뉴스에서 두 알리미(이쪽, saveticker)가 뽑은 목표가, 새것부터."""
+    return targets_db.read(since)
+
+
+def move_targets_to_shared(tickers: dict) -> int:
+    """이 DB 의 targets 표를 공용 DB 로 옮긴다 (공용 DB 에 이쪽 기록이 하나도 없을 때만). 옮긴 뉴스 수.
+    tickers 는 {종목 이름: 야후 티커}. 옛 표에는 티커 칸이 없었다."""
+    if targets_db.count("stocknews"):
+        return 0
+    by = {}
+    for r in con().execute("select t.*, j.title, j.title_ko, j.url, j.source, j.created_at, j.alerted from targets t "
+                           "join judged j on j.id = t.id order by t.id, t.n"):
+        r = dict(r)
+        rec, items = by.setdefault(r["id"], (r, []))
+        if r["n"] >= 0:
+            items.append(dict(r, ticker=tickers.get(r["stock"], "")))
+    for rec, items in by.values():
+        targets_db.save("stocknews", rec, items, rec["checked_at"])
+    return len(by)
 
 
 def reset(what: str) -> list:

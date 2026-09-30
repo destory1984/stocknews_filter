@@ -104,13 +104,18 @@ saveticker_filter 는 사이트가 봇을 막아서 Edge 확장으로 뉴스를 
   - **종목 이름 순**(기본): 종목마다 칸을 나눠 이름 순(영어 A→Z 다음 한국 종목).
   - **최신순**(`/targets?o=new`): 모든 종목을 한 표에 시각과 함께 새것부터.
 - 제목에 목표가 낱말(price target, upgrade, initiate, 목표가, 투자의견 등)이 든 뉴스만 골라, 판별과 따로 Ollama 에
-  증권사·구분(상향·하향·유지·신규·의견상향·의견하향)·투자의견·목표가를 묻는다 (`targets.py`).
+  증권사·구분(상향·하향·유지·신규·의견상향·의견하향·제시)·투자의견·목표가를 묻는다 (`targets.py`).
+  "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것이다.
   09-22 → 09-29 판별한 2,563건 가운데 129건이 이렇게 걸렸다.
 - 개인 필자 글, 기관 보유 공시, 컨센서스, 관찰 종목이 아닌 회사는 뺀다. 목표가 숫자는 제목에 적힌 것만 쓴다.
 - 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합치고, "N곳" 을 누르면 기사들이 보인다. 목표가가 다르면 따로 둔다.
 - 구분은 기사들 가운데 가장 많이 나온 것을 쓴다. 모델이 "Baird Sets $1,520 Target" 을 "신규" 로 잘못 붙이는 일이 있어서다.
 - 증권사 이름 갈래(JPMorgan / J.P. Morgan / JPMorgan Chase & Co., Citi / Citigroup, RBC / Royal Bank Of Canada)는 합친다 (`targets.broker_key`).
 - Ollama 로만 묻는다. 꺼져 있으면 켜질 때까지 5분마다 다시 보고, 처음에는 지난 7일치를 채운다.
+- 목표가는 saveticker_filter 와 함께 쓰는 공용 SQLite 파일에 적는다 (`targets_db.py`, 두 저장소에 같은 파일).
+  - 위치는 환경변수 `STOCK_TARGETS_DB`, 없으면 사용자 폴더의 `.stock_targets/targets.db`.
+  - 줄마다 어느 알리미가 뽑았는지(`origin`)와 기사 제목·링크·언론사를 함께 적는다. 그래서 한쪽이 꺼져 있어도 다른 쪽 표에 보인다.
+  - 이 표에는 관찰 종목만 보인다. saveticker 가 뽑은 것도 티커나 이름이 관찰 종목과 맞으면 함께 보인다.
 - 09-29 에 24건을 Claude 로 뽑아 제목과 견주니 뽑은 12건의 증권사·구분·목표가가 모두 맞았다.
   제목에 증권사 이름이 없는 기사("하이닉스 목표가 264만원으로 뚝")는 뽑지 않는다.
 - 09-29 에 그때까지 들어온 목표가 뉴스 후보 130건을 Ollama 로 한꺼번에 뽑아 71건을 얻었다. 줄로 합치면 27줄이다.
@@ -122,6 +127,7 @@ saveticker_filter 는 사이트가 봇을 막아서 Edge 확장으로 뉴스를 
 | `stock_alert.py` | 5분마다 뉴스를 받아 판별하고 알린다. 판별 목록 페이지(18766)도 연다. saveticker_filter 의 `news_alert.py` 에서 뉴스 출처만 바꿨다 |
 | `stocknews.py` | 구글 뉴스·야후 RSS 를 읽고 종목 키워드로 거른다. 혼자 돌려 목록만 볼 수도 있다 |
 | `targets.py` | 목표가 뉴스 고르기, 증권사·목표가 뽑기 프롬프트, 같은 조치 합치기 (`/targets` 목표가 표) |
+| `targets_db.py` | saveticker_filter 와 함께 쓰는 목표가 공용 DB |
 | `watchlist.json` | 종목 목록. `watchlist.example.json` 을 복사해 고친다 |
 | `interests.md` | 판별 기준이 되는 관심사. 고치면 다음 판별부터 반영된다 |
 | `store.py` | 뉴스·판별·반응 기록을 SQLite 한 파일(`data/stocknews.db`)에 둔다. koreainvest 의 `bars.db` 와 같은 방식(WAL) |
