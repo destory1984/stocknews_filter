@@ -201,8 +201,8 @@ def menu(cfg: dict, stocks: list) -> str:
   {row(_label("밀린 뉴스", "PC 가 잠들었다 깨면 이만큼 거슬러 판별"), _select(cfg, "catchup_hours", "밀린 뉴스"))}
   {row(_label("같은 사건 알림", "", "판별 모델이 뉴스마다 붙이는 사건 이름(보라)으로 묶는다. 같은 종목이고 이름의 낱말이 겹치면 (마이크론 실적 발표 · 마이크론 4분기 실적) 같은 사건으로 본다. 목록에는 모두 올라온다."), _select(cfg, "topic_hours", "같은 사건 알림"),
        "판별 모델이 뉴스마다 붙이는 사건 이름(보라)으로 묶는다. 같은 종목이고 이름의 낱말이 겹치면 (마이크론 실적 발표 · 마이크론 4분기 실적) 같은 사건으로 본다. 목록에는 모두 올라온다.")}
-  {row(_label("여러 곳 보도 알림", "", "기준 점수에 못 미쳐도(5점 이상) 6시간 안에 이만큼 여러 언론사가 쓴 사건이면 알린다. 이름 갈래(MarketBeat · marketbeat.com)는 한 곳으로 센다. 같은 사건 알림 시간 안에 이미 알린 사건은 다시 알리지 않는다."), _select(cfg, "buzz_sources", "여러 곳 보도 알림"),
-       "기준 점수에 못 미쳐도(5점 이상) 6시간 안에 이만큼 여러 언론사가 쓴 사건이면 알린다. 이름 갈래(MarketBeat · marketbeat.com)는 한 곳으로 센다. 같은 사건 알림 시간 안에 이미 알린 사건은 다시 알리지 않는다.")}
+  {row(_label("여러 곳 보도 알림", "", "기준 점수에 못 미쳐도(6점 이상) 6시간 안에 이만큼 여러 언론사가 쓴 사건이면 알린다. 이름 갈래(MarketBeat · marketbeat.com)는 한 곳으로 센다. 같은 사건 알림 시간 안에 이미 알린 사건은 다시 알리지 않는다."), _select(cfg, "buzz_sources", "여러 곳 보도 알림"),
+       "기준 점수에 못 미쳐도(6점 이상) 6시간 안에 이만큼 여러 언론사가 쓴 사건이면 알린다. 이름 갈래(MarketBeat · marketbeat.com)는 한 곳으로 센다. 같은 사건 알림 시간 안에 이미 알린 사건은 다시 알리지 않는다.")}
   {row(_label("판별 LLM", "", "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다."), _select(cfg, "backend", "판별 LLM"),
        "Ollama 는 이 PC 에서 돈다. 꺼져 있거나 엉뚱한 답을 내면 Claude CLI 로 넘긴다. Claude 는 구독 사용량을 쓴다.")}
   {row(_label("Claude 모델"), _select(cfg, "claude_model", "Claude 모델"))}

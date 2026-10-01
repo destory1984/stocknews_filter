@@ -83,7 +83,7 @@ DEFAULTS = {
     # 기준 점수에 못 미쳐도 6시간 안에 언론사 buzz_sources 곳 넘게 쓴 사건이면 알린다 (buzz_min_score 점 이상만, 0 이면 끔).
     # 09-27 까지 기록으로 되돌려 보면 하루 한 번쯤 (높은 점수 사건은 이미 알림이 나가서)
     "buzz_sources": 4,
-    "buzz_min_score": 5,
+    "buzz_min_score": 6,
     "catchup_hours": 12,           # 절전·재시작으로 밀린 뉴스는 이만큼까지 거슬러 판별해 목록에만 올린다
     "batch": 10,                   # 한 번에 묻는 뉴스 수
     "poll_sec": 10,
@@ -2042,6 +2042,67 @@ TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9
                  "신규": "#e0a44a", "유지": "#8a9099", "제시": "#8a9099"}
 
 
+# 목표가 표를 그림(PNG)으로 만들어 클립보드에 넣는다 (10-01 전하: PC 에서 캡처해 카톡으로 보낸다).
+# 표를 복제해 계산된 모양을 줄마다 박아 넣고, SVG foreignObject 로 그려 canvas 에서 PNG 를 뽑는다. 바깥 라이브러리는 쓰지 않는다
+COPY_IMG = """<script>
+const CPY_PROPS = ["display","grid-template-columns","grid-column-start","grid-column-end","column-gap","color","background-color",
+  "font-family","font-size","font-weight","line-height","padding-top","padding-right","padding-bottom","padding-left",
+  "margin-top","margin-right","margin-bottom","margin-left","border-top","border-right","border-bottom","border-left",
+  "border-radius","white-space","width","min-width","max-width","text-decoration","list-style-type","vertical-align",
+  "box-sizing","opacity","text-align","overflow-wrap","word-break"];
+async function targetsPng(limit) {
+  const box = document.createElement("div"), bs = getComputedStyle(document.body);
+  const first = document.querySelector(".card, body > table.tg");
+  if (!first) throw new Error("표가 비어 있음");
+  box.style.cssText = "position:absolute;left:-99999px;top:0;box-sizing:border-box;padding:10px 12px;background:#16181c;color:" + bs.color +
+    ";font:" + bs.font + ";width:" + (first.getBoundingClientRect().width + 24) + "px";
+  const d = new Date(), head = document.createElement("div");
+  head.textContent = "목표가 표 · " + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  head.style.cssText = "font-weight:700;margin:0 0 6px";
+  box.appendChild(head);
+  for (const el of document.querySelectorAll(".card, body > table.tg")) box.appendChild(el.cloneNode(true));
+  document.body.appendChild(box);
+  try {
+    [...box.querySelectorAll("tr")].forEach((tr, i) => { if (limit && i >= limit) tr.remove(); });
+    for (const c of box.querySelectorAll(".card")) if (!c.querySelector("tr")) c.remove();
+    for (const a of box.querySelectorAll("a")) a.removeAttribute("href");
+    const all = [...box.querySelectorAll("*")];
+    const styles = all.map(el => { const cs = getComputedStyle(el); return CPY_PROPS.map(p => p + ":" + cs.getPropertyValue(p)).join(";"); });
+    all.forEach((el, i) => { el.removeAttribute("class"); el.setAttribute("style", styles[i]); });
+    const w = Math.ceil(box.getBoundingClientRect().width), h = Math.ceil(box.getBoundingClientRect().height);
+    box.style.position = "static"; box.style.left = "auto";
+    const xml = new XMLSerializer().serializeToString(box);
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + w + "' height='" + h + "'><foreignObject width='100%' height='100%'>" + xml + "</foreignObject></svg>";
+    const img = new Image();
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = () => no(new Error("그림을 만들지 못함")); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg); });
+    const k = Math.min(2, 16000 / h), cv = document.createElement("canvas");
+    cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+    const cx = cv.getContext("2d"); cx.scale(k, k); cx.drawImage(img, 0, 0);
+    return await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error("PNG 를 만들지 못함")), "image/png"));
+  } finally { box.remove(); }
+}
+addEventListener("DOMContentLoaded", () => {
+  const a = document.getElementById("cpy"), sel = document.getElementById("cpyn"), note = document.getElementById("cpymsg");
+  if (!a) return;
+  const say = t => { note.textContent = t; };
+  a.onclick = async () => {
+    say("그림 만드는 중…");
+    const job = targetsPng(Number(sel.value));
+    try {
+      await navigator.clipboard.write([new ClipboardItem({"image/png": job})]);
+      say("클립보드에 넣었습니다. 카톡 창에서 Ctrl+V.");
+    } catch (e) {
+      try {   // 클립보드가 막혔으면 파일로 내려 준다
+        const url = URL.createObjectURL(await job), dl = document.createElement("a");
+        dl.href = url; dl.download = "targets.png"; dl.click(); URL.revokeObjectURL(url);
+        say("클립보드에 못 넣어 targets.png 파일로 내려받았습니다.");
+      } catch (e2) { say("실패: " + e2.message); }
+    }
+  };
+});
+</script>"""
+
+
 def target_row(g: dict, stock: str = "") -> str:
     """목표가 표 한 줄. stock 을 주면(최신순 보기) 종목 칸을 넣는다. 날짜는 월-일만 (10-01 전하 분부: 시각·요일 뺌)."""
     k = g["at"].astimezone(KST)
@@ -2120,7 +2181,7 @@ html.nar table tr{{display:grid;grid-template-columns:3.2em 9.5em 4.6em 1fr 4.6e
 html.nar table tr:has(td.sk){{grid-template-columns:3.2em 5.6em 9.5em 4.6em 1fr 4.6em}}
 html.nar td{{border:0;padding:0;min-width:0!important;white-space:normal}} html.nar td.d{{white-space:nowrap}}
 html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}} html.nar td.bl{{display:none}}
-#tgw{{color:#8ab4f8;cursor:pointer;margin-left:10px}}
+#tgw,#cpy{{color:#8ab4f8;cursor:pointer;margin-left:10px}} #cpyn{{background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:4px;font:inherit}}
 </style>
 <script>
 // 좁게 보기가 기본이다 (캡처해서 카톡으로 보내면 휴대폰으로 본다). "넓게" 를 고르면 기억한다
@@ -2136,7 +2197,8 @@ addEventListener("DOMContentLoaded",()=>{{
 {settings.FS_BAR}
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>목표가 표</h2>
-<p class=sort>정렬: {sort} <a id=tgw></a></p>
+{COPY_IMG}
+<p class=sort>정렬: {sort} <a id=tgw></a> <a id=cpy>그림으로 복사</a> <select id=cpyn><option value=20>위 20줄<option value=40>위 40줄<option value=0>전체</select> <span id=cpymsg class=why></span></p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
