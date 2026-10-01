@@ -248,7 +248,7 @@ header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .hbtn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:99px;padding:2px 9px;cursor:pointer;white-space:nowrap}
 .hbtn:hover{background:var(--sel)} .hbtn:disabled{opacity:.4;cursor:default}
 .fsz{display:inline-flex} .fsz .hbtn:first-child{border-radius:99px 0 0 99px;border-right:0} .fsz .hbtn:last-child{border-radius:0 99px 99px 0}
-.menu{position:fixed;z-index:10;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 4px;box-shadow:0 4px 16px rgba(0,0,0,.4);display:grid;width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 70px);overflow-y:auto;overflow-x:hidden}
+.menu{position:fixed;z-index:10;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 4px;box-shadow:0 4px 16px rgba(0,0,0,.4);display:grid;width:min(max(480px,calc(var(--fs) * 34)),calc(100vw - 16px));max-height:calc(100vh - 70px);overflow-y:auto;overflow-x:hidden}
 .menu[hidden],.menu [hidden]{display:none!important}
 .menu .sub{color:var(--muted);font-size:.9em}
 .menu .mrow{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:4px 8px}
