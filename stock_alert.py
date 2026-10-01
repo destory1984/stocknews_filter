@@ -2116,10 +2116,10 @@ summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:
 .back{{color:#8ab4f8}}
 html.nar body{{max-width:660px;margin:8px}} html.nar .card{{padding:6px 8px}}
 html.nar table,html.nar table tbody{{display:block}}
-html.nar table tr{{display:grid;grid-template-columns:3.2em 9.5em 4.6em 1fr 4.6em 1.4em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
-html.nar table tr:has(td.sk){{grid-template-columns:3.2em 5.6em 9.5em 4.6em 1fr 4.6em 1.4em}}
+html.nar table tr{{display:grid;grid-template-columns:3.2em 9.5em 4.6em 1fr 4.6em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
+html.nar table tr:has(td.sk){{grid-template-columns:3.2em 5.6em 9.5em 4.6em 1fr 4.6em}}
 html.nar td{{border:0;padding:0;min-width:0!important;white-space:normal}} html.nar td.d{{white-space:nowrap}}
-html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}}
+html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}} html.nar td.bl{{display:none}}
 #tgw{{color:#8ab4f8;cursor:pointer;margin-left:10px}}
 </style>
 <script>
