@@ -2112,7 +2112,7 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 .pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
-html.nar body{{max-width:440px;margin:8px}} html.nar .card{{padding:6px 8px}}
+html.nar body{{max-width:660px;margin:8px}} html.nar .card{{padding:6px 8px}}
 html.nar table,html.nar table tbody,html.nar table tr{{display:block}} html.nar table tr{{padding:5px 0;border-top:1px solid #2a2d33}}
 html.nar td{{display:inline-block;border:0;padding:0 6px 0 0;min-width:0!important}} html.nar td.pt{{white-space:normal}}
 html.nar td.nw{{display:block;width:auto;padding:2px 0 0}} html.nar td.bl:empty,html.nar td.rt:empty{{display:none}}
