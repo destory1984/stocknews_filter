@@ -2134,6 +2134,34 @@ TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9
                  "신규": "#e0a44a", "유지": "#8a9099", "제시": "#8a9099"}
 
 
+# 목표가 표 골라 보기: 기간(오늘·3일·7일·전체)과 "유지·제시 빼기". 브라우저에서 줄을 감추기만 한다 (그림으로 복사도 보이는 줄만 담는다)
+TG_FILTER = """<script>
+addEventListener("DOMContentLoaded", () => {
+  const sel = document.getElementById("tgd"), chk = document.getElementById("tgk"), cnt = document.getElementById("tgc");
+  if (!sel) return;
+  const get = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const set = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  sel.value = get("tgd") || "0"; chk.checked = get("tgk") === "1";
+  const apply = () => {
+    const days = Number(sel.value), d = new Date();
+    d.setDate(d.getDate() - (days - 1));
+    const cut = days ? d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") : "";
+    let shown = 0, all = 0;
+    for (const tr of document.querySelectorAll("tr[data-d]")) {
+      all++;
+      tr.hidden = (cut && tr.dataset.d < cut) || (chk.checked && (tr.dataset.a === "유지" || tr.dataset.a === "제시"));
+      if (!tr.hidden) shown++;
+    }
+    for (const c of document.querySelectorAll(".card")) c.hidden = !c.querySelector("tr:not([hidden])");
+    cnt.textContent = shown === all ? all + "줄" : shown + " / " + all + "줄";
+    set("tgd", sel.value); set("tgk", chk.checked ? "1" : "0");
+  };
+  sel.onchange = chk.onchange = apply;
+  apply();
+});
+</script>"""
+
+
 # 목표가 표를 그림(PNG)으로 만들어 클립보드에 넣는다 (10-01 전하: PC 에서 캡처해 카톡으로 보낸다).
 # 표를 복제해 계산된 모양을 줄마다 박아 넣고, SVG foreignObject 로 그려 canvas 에서 PNG 를 뽑는다. 바깥 라이브러리는 쓰지 않는다
 COPY_IMG = """<script>
@@ -2155,6 +2183,7 @@ async function targetsPng(limit) {
   for (const el of document.querySelectorAll(".card, body > table.tg")) box.appendChild(el.cloneNode(true));
   document.body.appendChild(box);
   try {
+    for (const x of box.querySelectorAll("[hidden]")) x.remove();   // 골라 보기로 감춘 줄
     [...box.querySelectorAll("tr")].forEach((tr, i) => { if (limit && i >= limit) tr.remove(); });
     for (const c of box.querySelectorAll(".card")) if (!c.querySelector("tr")) c.remove();
     for (const a of box.querySelectorAll("a")) a.removeAttribute("href");
@@ -2207,7 +2236,7 @@ def target_row(g: dict, stock: str = "") -> str:
                     for x in g["news"])
     news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
             else f"<ul class=one>{links}</ul>")
-    return (f"<tr><td class=d>{k:%m-%d %H:%M}</td>"
+    return (f"<tr data-d='{k:%Y-%m-%d}' data-a='{g['action']}'><td class=d>{k:%m-%d %H:%M}</td>"
             + (f"<td class=sk>{html.escape(stock)}</td>" if stock else "")
             + f"<td class=br>{html.escape(g['broker'])}</td>"
             f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
@@ -2273,7 +2302,7 @@ html.nar table tr{{display:grid;grid-template-columns:6.2em 9.5em 4.6em 1fr 4.6e
 html.nar table tr:has(td.sk){{grid-template-columns:6.2em 5.6em 9.5em 4.6em 1fr 4.6em}}
 html.nar td{{border:0;padding:0;min-width:0!important;white-space:normal}} html.nar td.d{{white-space:nowrap}}
 html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}} html.nar td.bl{{display:none}}
-#tgw,#cpy{{color:#8ab4f8;cursor:pointer;margin-left:10px}} #cpyn{{background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:4px;font:inherit}}
+#tgw,#cpy{{color:#8ab4f8;cursor:pointer;margin-left:10px}} tr[hidden],.card[hidden]{{display:none!important}} #cpyn,#tgd{{background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:4px;font:inherit}}
 </style>
 <script>
 // 좁게 보기가 기본이다 (캡처해서 카톡으로 보내면 휴대폰으로 본다). "넓게" 를 고르면 기억한다
@@ -2290,7 +2319,9 @@ addEventListener("DOMContentLoaded",()=>{{
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>목표가 표</h2>
 {COPY_IMG}
+{TG_FILTER}
 <p class=sort>정렬: {sort} <a id=tgw></a> <a id=cpy>그림으로 복사</a> <select id=cpyn><option value=20>위 20줄<option value=40>위 40줄<option value=0>전체</select> <span id=cpymsg class=why></span></p>
+<p class=sort>보기: <select id=tgd><option value=0>30일 전체<option value=1>오늘<option value=3>3일<option value=7>7일</select> <label><input type=checkbox id=tgk> 유지·제시 빼기</label> <span id=tgc class=why></span></p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama, 꺼져 있으면 Claude)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
