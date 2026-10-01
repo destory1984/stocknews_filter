@@ -2112,16 +2112,27 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 .pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
-@media (max-width:700px){{
-body{{margin:8px}} .card{{padding:6px 8px}} table,tbody,tr{{display:block}} tr{{padding:5px 0;border-top:1px solid #2a2d33}}
-td{{display:inline-block;border:0;padding:0 6px 0 0;min-width:0!important}} td.pt{{white-space:normal}} td.nw{{display:block;width:auto;padding:2px 0 0}}
-td.bl:empty,td.rt:empty{{display:none}}
-}}
+html.nar body{{max-width:440px;margin:8px}} html.nar .card{{padding:6px 8px}}
+html.nar table,html.nar table tbody,html.nar table tr{{display:block}} html.nar table tr{{padding:5px 0;border-top:1px solid #2a2d33}}
+html.nar td{{display:inline-block;border:0;padding:0 6px 0 0;min-width:0!important}} html.nar td.pt{{white-space:normal}}
+html.nar td.nw{{display:block;width:auto;padding:2px 0 0}} html.nar td.bl:empty,html.nar td.rt:empty{{display:none}}
+#tgw{{color:#8ab4f8;cursor:pointer;margin-left:10px}}
 </style>
+<script>
+// 좁게 보기가 기본이다 (캡처해서 카톡으로 보내면 휴대폰으로 본다). "넓게" 를 고르면 기억한다
+function tgw(){{try{{return localStorage.getItem("tgw")}}catch(e){{return null}}}}
+if(tgw()!=="wide"||innerWidth<700)document.documentElement.classList.add("nar");
+addEventListener("DOMContentLoaded",()=>{{
+  const a=document.getElementById("tgw"),nar=()=>document.documentElement.classList.contains("nar");
+  const show=()=>{{a.textContent=nar()?"넓게 보기":"좁게 보기"}};
+  a.onclick=()=>{{document.documentElement.classList.toggle("nar");try{{localStorage.setItem("tgw",nar()?"narrow":"wide")}}catch(e){{}};show()}};
+  show();
+}});
+</script>
 {settings.FS_BAR}
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
 <h2>목표가 표</h2>
-<p class=sort>정렬: {sort}</p>
+<p class=sort>정렬: {sort} <a id=tgw></a></p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
