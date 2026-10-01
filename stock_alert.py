@@ -2120,7 +2120,7 @@ def target_row(g: dict, stock: str = "") -> str:
             + f"<td class=br>{html.escape(g['broker'])}</td>"
             f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
             f"<td class=pt>{pt}</td><td class=rt>{html.escape(g['rating'])}</td>"
-            f"<td class=bl>{'🔔' if any(x['alerted'] for x in g['news']) else ''}</td><td class=nw>{news}</td></tr>")
+            f"<td class=nw>{news}</td></tr>")
 
 
 def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
