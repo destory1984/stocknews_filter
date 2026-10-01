@@ -2102,7 +2102,7 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
                if r["id"] not in checked and r.get("created_at", "") >= week and targets.is_candidate(r))
     empty = [s["name"] for s in stocks if s["name"] not in by]
     summary = " · ".join(f"{a} {count[a]}" for a in targets.ACTIONS if count.get(a)) or "아직 없음"
-    return f"""<!doctype html><meta charset=utf-8><title>목표가 표 · 종목 뉴스 필터</title>
+    return f"""<!doctype html><meta charset=utf-8><title>목표가 표 · 종목 뉴스 필터</title><meta name=viewport content='width=device-width,initial-scale=1'>
 <style>
 body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:1100px}}
 a{{color:#e6e6e6;text-decoration:none}} a:hover{{text-decoration:underline}} .why{{color:#8a9099;font-size:.88em}}
@@ -2112,6 +2112,11 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 .pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
+@media (max-width:700px){{
+body{{margin:8px}} .card{{padding:6px 8px}} table,tbody,tr{{display:block}} tr{{padding:5px 0;border-top:1px solid #2a2d33}}
+td{{display:inline-block;border:0;padding:0 6px 0 0;min-width:0!important}} td.pt{{white-space:normal}} td.nw{{display:block;width:auto;padding:2px 0 0}}
+td.bl:empty,td.rt:empty{{display:none}}
+}}
 </style>
 {settings.FS_BAR}
 <p class=why><a class=back href='/'>← 판별 목록</a></p>
