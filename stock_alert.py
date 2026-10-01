@@ -2043,7 +2043,7 @@ TARGET_COLORS = {"상향": "#e06c6c", "의견상향": "#e06c6c", "하향": "#6c9
 
 
 def target_row(g: dict, stock: str = "") -> str:
-    """목표가 표 한 줄. stock 을 주면(최신순 보기) 날짜에 시각을 붙이고 종목 칸을 넣는다."""
+    """목표가 표 한 줄. stock 을 주면(최신순 보기) 종목 칸을 넣는다. 날짜는 월-일만 (10-01 전하 분부: 시각·요일 뺌)."""
     k = g["at"].astimezone(KST)
     pt = money(g["pt_new"], g["currency"])
     if g["pt_old"] and g["pt_new"] and g["pt_old"] != g["pt_new"]:
@@ -2054,7 +2054,7 @@ def target_row(g: dict, stock: str = "") -> str:
                     for x in g["news"])
     news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
             else f"<ul class=one>{links}</ul>")
-    return (f"<tr><td class=d>{k:%m-%d}({'월화수목금토일'[k.weekday()]}){f' {k:%H:%M}' if stock else ''}</td>"
+    return (f"<tr><td class=d>{k:%m-%d}</td>"
             + (f"<td class=sk>{html.escape(stock)}</td>" if stock else "")
             + f"<td class=br>{html.escape(g['broker'])}</td>"
             f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
@@ -2087,7 +2087,9 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
         for g in gs:
             count[g["action"]] = count.get(g["action"], 0) + 1
     if order != "name":
-        flat = sorted(((g, name) for name, gs in groups.items() for g in gs), key=lambda x: x[0]["at"], reverse=True)
+        # 종목 칸은 티커로 (10-01 전하 분부). 한국 종목(005930.KS)과 티커 없는 종목은 이름 그대로
+        short = lambda name: name if not ticker.get(name) or ticker[name][0].isdigit() else ticker[name]
+        flat = sorted(((g, short(name)) for name, gs in groups.items() for g in gs), key=lambda x: x[0]["at"], reverse=True)
         cards = ([f"<div class=card><table>{''.join(target_row(g, name) for g, name in flat)}</table></div>"]
                  if flat else [])
     else:
@@ -2113,9 +2115,11 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
 .back{{color:#8ab4f8}}
 html.nar body{{max-width:660px;margin:8px}} html.nar .card{{padding:6px 8px}}
-html.nar table,html.nar table tbody,html.nar table tr{{display:block}} html.nar table tr{{padding:5px 0;border-top:1px solid #2a2d33}}
-html.nar td{{display:inline-block;border:0;padding:0 6px 0 0;min-width:0!important}} html.nar td.pt{{white-space:normal}}
-html.nar td.nw{{display:block;width:auto;padding:2px 0 0}} html.nar td.bl:empty,html.nar td.rt:empty{{display:none}}
+html.nar table,html.nar table tbody{{display:block}}
+html.nar table tr{{display:grid;grid-template-columns:3.2em 9.5em 4.6em 1fr 4.6em 1.4em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
+html.nar table tr:has(td.sk){{grid-template-columns:3.2em 5.6em 9.5em 4.6em 1fr 4.6em 1.4em}}
+html.nar td{{border:0;padding:0;min-width:0!important;white-space:normal}} html.nar td.d{{white-space:nowrap}}
+html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}}
 #tgw{{color:#8ab4f8;cursor:pointer;margin-left:10px}}
 </style>
 <script>
