@@ -1443,6 +1443,8 @@ def make_handler(watcher: Watcher):
                 self.send_page(targets_page(watcher, q.get("o", "")))
             elif u.path == "/sources":
                 self.send_page(sources_page(watcher))
+            elif u.path == "/react":
+                self.send_page(react_page(watcher))
             elif u.path == "/":
                 watcher.summarizer.poke()   # 목록이 갱신될 때마다 Ollama 가 켜졌는지 보고 밀린 요약을 한다
                 ver = watcher.ver
@@ -1726,6 +1728,84 @@ def grading_html(watcher: Watcher) -> str:
             + trend
             + (f"<p class=why>크게 어긋난 것 {len(miss)}건 — interests.md 를 고칠 때 볼 것</p><ul class=miss>{items}</ul>"
                if miss else "<p class=why>크게 어긋난 것은 없다.</p>"))
+
+
+# 알림을 종류로 나눈다 (알림 뒤 주가 성적표). 위에서부터 먼저 맞는 것. 제목·번역 제목·사건 이름으로 본다
+ALERT_KINDS = (
+    ("여러 곳 보도", None),
+    ("목표가·의견", re.compile(r"애널리스트|증권|analyst", re.I)),
+    ("실적", re.compile(r"실적|earnings|가이던스|매출|영업이익|EPS|revenue|guidance", re.I)),
+    ("주가 움직임", re.compile(r"주가|급등|급락|신고가|상승|하락|soar|surge|plunge|jump|slip|rall|drop|fall|shares", re.I)),
+    ("계약·투자·M&A", re.compile(r"계약|수주|공급|인수|합병|상장|IPO|투자|deal|contract|acqui|order", re.I)),
+    ("규제·정책·소송", re.compile(r"규제|제재|관세|소송|수출|중국|특허|ban|tariff|lawsuit|export|china", re.I)),
+    ("발언", re.compile(r"발언|CEO|머스크|젠슨|Musk|Huang|says", re.I)),
+    ("업황", re.compile(r"HBM|D램|낸드|DRAM|NAND|메모리|수요|가격|memory|demand", re.I)),
+)
+
+
+def alert_kind(rec: dict) -> str:
+    if "곳 보도" in (rec.get("reason") or ""):
+        return "여러 곳 보도"
+    text = " ".join(rec.get(k) or "" for k in ("title", "title_ko", "topic"))
+    if targets.CANDIDATE.search(text):
+        return "목표가·의견"
+    return next((name for name, rx in ALERT_KINDS[1:] if rx.search(text)), "그 밖")
+
+
+def react_page(watcher: Watcher) -> str:
+    """알림 뒤 주가 성적표: 알림을 점수·종류·종목·언론사로 묶어, 1시간 뒤 주가가 얼마나 움직였는지와 👍·👎 를 본다.
+    주가는 장이 열려 있을 때 나간 알림만 잰다 (reactions 표). 움직임은 오르내림을 가리지 않은 크기(절댓값)다."""
+    rx = store.reactions()
+    fb = {k: fb_key(v) for k, v in latest_feedback().items()}
+    recs = [r for r in list(watcher.judged.values()) if r.get("alerted")]
+    first = min((r.get("at", "") for r in recs), default="")
+
+    def table(title: str, key, least: int = 1, order=None) -> str:
+        by = {}
+        for r in recs:
+            for k in key(r):
+                by.setdefault(k, []).append(r)
+        rows = []
+        for k, rs in sorted(by.items(), key=order or (lambda x: -len(x[1]))):
+            ch = sorted(abs(rx[r["id"]]["change"]) for r in rs if rx.get(r["id"]) and rx[r["id"]]["change"] is not None)
+            if len(rs) < least:
+                continue
+            up = sum(fb.get(r["id"]) in ("1", "10") for r in rs)
+            down = sum(fb.get(r["id"]) in ("0", "00") for r in rs)
+            big = sum(c >= 1 for c in ch)
+            rows.append(f"<tr><td>{html.escape(str(k))}</td><td>{len(rs)}</td><td>{len(ch) or ''}</td>"
+                        f"<td>{f'{ch[len(ch) // 2]:.2f}%' if ch else ''}</td>"
+                        f"<td>{f'{big} ({big * 100 // len(ch)}%)' if ch else ''}</td><td>{up or ''}</td><td>{down or ''}</td></tr>")
+        return (f"<h3>{title}</h3><table class=g><thead><tr><th></th><th>알림</th><th>주가 잰 것</th><th>움직임 중간값</th>"
+                f"<th>1% 넘게</th><th>👍</th><th>👎</th></tr></thead><tbody>{''.join(rows)}</tbody></table>")
+
+    moved = sorted((r for r in recs if rx.get(r["id"]) and rx[r["id"]]["change"] is not None),
+                   key=lambda r: -abs(rx[r["id"]]["change"]))[:15]
+    top = "".join(
+        f"<li>{reaction_html(rx[r['id']])} <small>{r.get('at', '')[5:16].replace('T', ' ')} · {r.get('score')}점 · "
+        f"{html.escape(alert_kind(r))}</small> <a href=\"{html.escape(r.get('url', ''))}\" target=_blank>"
+        f"{html.escape(r.get('title_ko') or r.get('title', ''))}</a></li>" for r in moved)
+    measured = sum(1 for r in recs if rx.get(r["id"]) and rx[r["id"]]["change"] is not None)
+    return f"""<!doctype html><meta charset=utf-8><title>알림 뒤 주가 · 종목 뉴스 필터</title>
+<style>
+body{{font:var(--fs) system-ui,sans-serif;background:#16181c;color:#e6e6e6;margin:16px;max-width:900px}}
+a{{color:#8ab4f8}} h2{{margin:0 0 4px;font-size:1.3em}} .why{{color:#8a9099;font-size:.86em}}
+table{{border-collapse:collapse}} th,td{{padding:4px 12px;border-bottom:1px solid #2a2d33;text-align:right}}
+th:first-child,td:first-child{{text-align:left}} th{{color:#b8bec6;font-weight:600;white-space:nowrap}}
+h3{{margin:18px 0 4px;font-size:1.1em}} ul{{margin:4px 0;padding-left:20px}} li{{margin:3px 0}}
+li a{{color:#e6e6e6;text-decoration:none}} li small{{color:#8a9099}} .rx{{font-weight:600}}
+</style>
+{settings.FS_BAR}
+<p class=why><a href='/'>← 판별 목록</a></p>
+<h2>알림 뒤 주가</h2>
+<p class=why>{html.escape(first[:10])} 부터 보낸 알림 {len(recs)}번, 그중 1시간 뒤 주가를 잰 것 {measured}번 (장이 닫혀 있을 때 나간 알림은 재지 않는다) ·
+움직임은 오르내림을 가리지 않은 크기 · '1% 넘게' 는 잰 것 가운데 1% 넘게 움직인 수 · 건수가 적으면 우연일 수 있다</p>
+{table("점수별", lambda r: [f"{r.get('score')}점"], order=lambda x: x[0].zfill(4))}
+{table("종류별", lambda r: [alert_kind(r)])}
+{table("종목별", lambda r: [t.strip() for t in (r.get("tickers") or "").split(",") if t.strip()])}
+{table("언론사별 (알림 5번 이상)", lambda r: [SOURCE_NAMES.get(r.get("source") or "", r.get("source") or "(없음)")], least=5)}
+<h3>가장 크게 움직인 알림</h3>
+<ul>{top}</ul>"""
 
 
 NAME_MAX = 50   # 언론사 성적표의 이름 칸 글자 수 (합친 이름 포함)
@@ -2361,7 +2441,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>
 {menu}
-<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · <a href='/targets' style='text-decoration:underline'>목표가 표</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
+<p class=why id=stockline><a href='/sources' style='text-decoration:underline'>판별·언론사 성적표</a> · <a href='/week' style='text-decoration:underline'>주간 리포트</a> · <a href='/targets' style='text-decoration:underline'>목표가 표</a> · <a href='/react' style='text-decoration:underline'>알림 뒤 주가</a> · 종목 {names} · 구글 뉴스·야후 파이낸스에서 {watcher.cfg['fetch_min']}분마다 받습니다 · 마지막 수집 {watcher.fetch_note} · {watcher.summarizer.status()}</p>
 {filt}
 {earnings_line()}
 {moves_html(watcher, stock)}
