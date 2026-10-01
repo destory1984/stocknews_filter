@@ -380,6 +380,18 @@ def ask_ollama(cfg: dict, prompt: str, timeout: float) -> str:
     return r.json()["response"]
 
 
+def ask_targets(cfg: dict, prompt: str) -> tuple:
+    """목표가 뽑기 물음: Ollama 먼저, 안 되면 Claude (10-01 전하 분부: Ollama 를 끈 동안에도 목표가 표가 채워지게).
+    (답, 답한 쪽). backend 가 "ollama" 면 Claude 로 넘기지 않는다."""
+    if cfg["backend"] in ("auto", "ollama"):
+        try:
+            return ask_ollama(cfg, prompt, cfg["ollama_timeout_sec"] if cfg["backend"] == "auto" else cfg["timeout_sec"]), "ollama"
+        except Exception:
+            if cfg["backend"] == "ollama":
+                raise
+    return ask_claude(cfg, prompt), "claude"
+
+
 def parse_results(text: str, batch: list) -> dict:
     """{id: (score, reason, topic, say, ko, sum, con)}. reason 은 볼 까닭, con 은 안 볼 까닭. 모델이 빠뜨린 뉴스는 결과에 없다.
     ko 는 영어 제목의 번역, sum 은 RSS 설명(야후)의 한국어 요약."""
@@ -1316,7 +1328,7 @@ class Watcher:
 
     def targets_loop(self):
         """목표가 뉴스에서 증권사·목표가를 뽑는다 (1분마다, 처음에는 지난 7일치를 채운다).
-        Ollama 로만 묻는다. 요약처럼 급하지 않아서, 꺼져 있으면 5분 뒤 다시 본다 (Claude 사용량을 아낀다)."""
+        Ollama 에 먼저 묻고, 꺼져 있으면 Claude 에 묻는다 (ask_targets). 둘 다 안 되면 5분 뒤 다시 본다."""
         tries = {}   # 뉴스 id → 모델이 답을 빠뜨린 횟수. 세 번이면 "목표가 뉴스 아님" 으로 적는다
         down = False  # Ollama 가 꺼진 것을 한 번만 적는다 (게임하는 동안 5분마다 찍히지 않게)
         while True:
@@ -1344,8 +1356,8 @@ class Watcher:
         ticker = {s["name"]: s.get("yahoo", "") for s in stocks}   # saveticker 쪽 기록과 티커로 맞춘다
         for k in range(0, len(todo), size):
             batch = todo[k:k + size]
-            got = targets.parse(ask_ollama(self.cfg, targets.build_prompt(batch, names), self.cfg["timeout_sec"]),
-                                batch, names)
+            text, by = ask_targets(self.cfg, targets.build_prompt(batch, names))
+            got = targets.parse(text, batch, names)
             for items in got.values():
                 for x in items:
                     x["ticker"] = ticker.get(x["stock"], "")
@@ -1356,7 +1368,7 @@ class Watcher:
                         continue
                 store.save_targets(r, got.get(r["id"], []))
             n = sum(len(v) for v in got.values())
-            log(f"🎯 목표가 {n}건 뽑음 (뉴스 {len(batch)}건 중 {sum(1 for v in got.values() if v)}건이 목표가 뉴스)")
+            log(f"🎯 목표가 {n}건 뽑음 (뉴스 {len(batch)}건 중 {sum(1 for v in got.values() if v)}건이 목표가 뉴스, {by})")
         return len(todo)
 
     def run(self):
@@ -2104,7 +2116,7 @@ addEventListener("DOMContentLoaded", () => {
 
 
 def target_row(g: dict, stock: str = "") -> str:
-    """목표가 표 한 줄. stock 을 주면(최신순 보기) 종목 칸을 넣는다. 날짜는 월-일만 (10-01 전하 분부: 시각·요일 뺌)."""
+    """목표가 표 한 줄. stock 을 주면(최신순 보기) 종목 칸을 넣는다. 날짜는 월-일 시:분 (10-01 전하 분부: 요일은 뺌)."""
     k = g["at"].astimezone(KST)
     pt = money(g["pt_new"], g["currency"])
     if g["pt_old"] and g["pt_new"] and g["pt_old"] != g["pt_new"]:
@@ -2115,7 +2127,7 @@ def target_row(g: dict, stock: str = "") -> str:
                     for x in g["news"])
     news = (f"<details><summary>{len(g['news'])}곳</summary><ul>{links}</ul></details>" if len(g["news"]) > 1
             else f"<ul class=one>{links}</ul>")
-    return (f"<tr><td class=d>{k:%m-%d}</td>"
+    return (f"<tr><td class=d>{k:%m-%d %H:%M}</td>"
             + (f"<td class=sk>{html.escape(stock)}</td>" if stock else "")
             + f"<td class=br>{html.escape(g['broker'])}</td>"
             f"<td class=ac><b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b></td>"
@@ -2177,8 +2189,8 @@ summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:
 .back{{color:#8ab4f8}}
 html.nar body{{max-width:660px;margin:8px}} html.nar .card{{padding:6px 8px}}
 html.nar table,html.nar table tbody{{display:block}}
-html.nar table tr{{display:grid;grid-template-columns:3.2em 9.5em 4.6em 1fr 4.6em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
-html.nar table tr:has(td.sk){{grid-template-columns:3.2em 5.6em 9.5em 4.6em 1fr 4.6em}}
+html.nar table tr{{display:grid;grid-template-columns:6.2em 9.5em 4.6em 1fr 4.6em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
+html.nar table tr:has(td.sk){{grid-template-columns:6.2em 5.6em 9.5em 4.6em 1fr 4.6em}}
 html.nar td{{border:0;padding:0;min-width:0!important;white-space:normal}} html.nar td.d{{white-space:nowrap}}
 html.nar td.nw{{grid-column:1/-1;width:auto;padding:2px 0 0}} html.nar td.bl{{display:none}}
 #tgw,#cpy{{color:#8ab4f8;cursor:pointer;margin-left:10px}} #cpyn{{background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47;border-radius:4px;font:inherit}}
@@ -2199,7 +2211,7 @@ addEventListener("DOMContentLoaded",()=>{{
 <h2>목표가 표</h2>
 {COPY_IMG}
 <p class=sort>정렬: {sort} <a id=tgw></a> <a id=cpy>그림으로 복사</a> <select id=cpyn><option value=20>위 20줄<option value=40>위 40줄<option value=0>전체</select> <span id=cpymsg class=why></span></p>
-<p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
+<p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama, 꺼져 있으면 Claude)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
 같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
 <p class=why>목표가 소식 없음: {html.escape(", ".join(empty)) or "없음"}</p>"""
