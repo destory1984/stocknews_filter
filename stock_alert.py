@@ -106,6 +106,7 @@ DEFAULTS = {
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
     "tts_voice_en": "",            # 영어 언론사 이름("The Motley Fool, …")을 읽을 영어 음성 (예: en-US-JennyNeural). 비우면 한국어 음성이 다 읽는다
     "tts_rate": "+0%",
+    "tts_volume": 100,             # 목소리 크기(%). 말머리 소리는 그대로다
     "tts_chime": r"C:\Windows\Media\Windows Notify Email.wav",   # saveticker(Messaging)·RSI 와 다른 소리
     "quiet_on": False,             # 조용한 시각을 쓸지
     "tts_quiet": "23:00-07:00",    # 조용한 시각: 말하지 않는다 (토스트·텔레그램은 소리 없이 그대로)
@@ -517,10 +518,19 @@ def voice_parts(cfg: dict, text: str) -> list:
     return [(text, ko)]
 
 
+def tts_volume(cfg: dict) -> int:
+    """목소리 크기 10 → 100 (%). 엉뚱한 값이면 100."""
+    try:
+        return max(10, min(100, int(cfg.get("tts_volume", 100))))
+    except (TypeError, ValueError):
+        return 100
+
+
 def _speak_edge(cfg: dict, text: str):
     import asyncio
     import edge_tts
     parts = voice_parts(cfg, text)
+    volume = f"{tts_volume(cfg) - 100:+d}%"
     files = []
     for _ in parts:
         fd, tmp = tempfile.mkstemp(prefix="news_tts_", suffix=".mp3")
@@ -528,7 +538,7 @@ def _speak_edge(cfg: dict, text: str):
         files.append(tmp)
 
     async def make():   # 조각을 한꺼번에 받아 두고 이어서 튼다 (사이가 벌어지지 않게)
-        await asyncio.gather(*(edge_tts.Communicate(t, v, rate=cfg["tts_rate"]).save(f)
+        await asyncio.gather(*(edge_tts.Communicate(t, v, rate=cfg["tts_rate"], volume=volume).save(f)
                                for (t, v), f in zip(parts, files)))
     try:
         asyncio.run(asyncio.wait_for(make(), 15))
@@ -542,12 +552,14 @@ def _speak_edge(cfg: dict, text: str):
                 pass
 
 
-def _speak_sapi(text: str):
+def _speak_sapi(text: str, volume: int = 100):
     import pythoncom
     import win32com.client
     pythoncom.CoInitialize()
     try:
-        win32com.client.Dispatch("SAPI.SpVoice").Speak(text)
+        voice = win32com.client.Dispatch("SAPI.SpVoice")
+        voice.Volume = volume
+        voice.Speak(text)
     finally:
         pythoncom.CoUninitialize()
 
@@ -566,7 +578,7 @@ def speak(cfg: dict, text: str) -> str:
     except Exception as e:
         log(f"edge 음성 실패 → SAPI: {type(e).__name__}: {str(e)[:100]}")
     try:
-        _speak_sapi(text)
+        _speak_sapi(text, tts_volume(cfg))
         return "sapi"
     except Exception as e:
         log(f"SAPI 도 실패: {type(e).__name__}: {e}")
@@ -1487,7 +1499,7 @@ def make_handler(watcher: Watcher):
 # ─────────────────────────────────────────────────────────────
 
 SETTING_LABELS = {"toast": "윈도우 알림", "threshold": "기준 점수", "max_age_min": "알림 시한", "tts": "음성",
-                  "tts_voice": "목소리", "tts_voice_en": "영어 언론사 목소리", "tts_rate": "빠르기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
+                  "tts_voice": "목소리", "tts_voice_en": "영어 언론사 목소리", "tts_rate": "빠르기", "tts_volume": "목소리 크기", "tts_chime": "말머리 소리", "quiet_on": "조용한 시각",
                   "tts_quiet": "조용한 시각", "telegram": "텔레그램", "fetch_min": "받는 간격",
                   "catchup_hours": "밀린 뉴스", "topic_hours": "같은 사건 알림", "buzz_sources": "여러 곳 보도 알림", "backend": "판별 LLM", "claude_model": "Claude 모델",
                   "model": "Ollama 모델", "hide_max_score": "숨기기",

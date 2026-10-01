@@ -30,6 +30,7 @@ FIELDS = {
     "tts_voice": ("select", VOICES),
     "tts_voice_en": ("select", VOICES_EN),
     "tts_rate": ("select", RATES),
+    "tts_volume": ("select", [(str(v), f"{v}%") for v in range(100, 20, -10)]),
     "tts_chime": ("select", None),
     "quiet_on": ("bool", None),
     "tts_quiet": ("quiet", None),
@@ -44,7 +45,7 @@ FIELDS = {
     "model": ("text", None),
     "hide_max_score": ("select", [("-1", "숨기지 않음")] + [(str(i), f"{i}점 이하") for i in range(0, 6)]),
 }
-INT_KEYS = {"threshold", "max_age_min", "fetch_min", "catchup_hours", "hide_max_score", "topic_hours", "buzz_sources"}
+INT_KEYS = {"threshold", "max_age_min", "fetch_min", "catchup_hours", "hide_max_score", "topic_hours", "buzz_sources", "tts_volume"}
 
 
 def apply(cfg: dict, key: str, value) -> tuple:
@@ -188,6 +189,7 @@ def menu(cfg: dict, stocks: list) -> str:
   {row(_label("목소리"), _select(cfg, "tts_voice", "목소리"))}
   {row(_label("영어 언론사 목소리", "The Motley Fool 같은 영어 이름만"), _select(cfg, "tts_voice_en", "영어 언론사 목소리"))}
   {row(_label("빠르기"), _select(cfg, "tts_rate", "빠르기"))}
+  {row(_label("목소리 크기", "말머리 소리는 그대로"), _select(cfg, "tts_volume", "목소리 크기"))}
   {row(_label("말머리 소리", "saveticker 는 Windows Notify Messaging"), _select(cfg, "tts_chime", "말머리 소리"))}
   {row(_label("조용한 시각", "이 PC 시각. 23:00~07:00 처럼 자정을 넘어도 된다"), _switch(cfg, "quiet_on", "조용한 시각"))}
   <div class="mrow qtimes"><input type=time id=qfrom value="{qfrom}" aria-label="조용한 시각 시작"> ~ <input type=time id=qto value="{qto}" aria-label="조용한 시각 끝"></div>
@@ -365,7 +367,7 @@ function quietInputs() {
 }
 function ttsInputs() {
   const on = $('#setmenu .switch[data-key="tts"]').getAttribute("aria-checked") === "true";
-  ["tts_voice", "tts_voice_en", "tts_rate", "tts_chime"].forEach(k => $(`#setmenu [data-key="${k}"]`).disabled = !on);
+  ["tts_voice", "tts_voice_en", "tts_rate", "tts_volume", "tts_chime"].forEach(k => $(`#setmenu [data-key="${k}"]`).disabled = !on);
 }
 $("#qfrom").onchange = $("#qto").onchange = () => setKey("tts_quiet", $("#qfrom").value + "-" + $("#qto").value);
 quietInputs(); ttsInputs();
