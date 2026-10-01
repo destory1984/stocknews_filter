@@ -61,6 +61,15 @@ def test_source_key_folds_name_variants():
     assert stocknews.source_key("") == ""
 
 
+def test_source_muted():
+    # 가린 Kalkine Media 기사가 8점을 받아 알림이 나갔다. 눌러도 Cloudflare 에 막혀 못 읽는 곳이다 (10-02)
+    cfg = {"hide_sources": ["Kalkine Media"]}
+    assert a.source_muted(cfg, "Kalkine Media")
+    assert not a.source_muted(cfg, "Reuters")
+    assert not a.source_muted(cfg, "")
+    assert not a.source_muted({}, "Kalkine Media")
+
+
 # ── 제목에 적힌 옛 날짜 ──────────────────────────────────────
 def test_old_by_title():
     ref = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)

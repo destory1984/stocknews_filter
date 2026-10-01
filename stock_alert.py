@@ -100,7 +100,7 @@ DEFAULTS = {
     "move_pct_3x": 5.0,
     "move_3x": ["SOXL", "KORU"],
     "move_cooldown_min": 60,
-    "hide_sources": [],            # 판별 목록에서 가릴 언론사 (언론사 성적표에서 고른다). 판별·알림은 그대로 한다
+    "hide_sources": [],            # 판별 목록에서 가리고 알림도 내지 않을 언론사 (언론사 성적표에서 고른다). 판별은 그대로 한다
     "hide_max_score": 3,           # 판별 목록에서 이 점수 이하는 기본으로 숨긴다 (👍·🔔10 준 것은 보인다)
     "tts": True,                   # 알림을 말로도 읽는다: 말머리 소리 → "언론사, 제목" (영어 제목은 번역한 것)
     "tts_voice": "ko-KR-SunHiNeural",   # Edge 읽어주기 음성. 안 되면 윈도우 기본 음성(SAPI)
@@ -1257,11 +1257,15 @@ class Watcher:
                     r["title_ko"] = ko   # 토스트·텔레그램이 번역 제목을 쓴다
                 # 같은 사건(시진핑 발언 문장마다 뜨는 속보, 실적 예고 기사 여럿 등)은 topic_hours 에 한 번만 알린다
                 late = self.is_late(r)
-                alert = (score >= self.cfg["threshold"] and not late
+                # 가린 언론사는 알리지도 않는다 (10-02 전하: Kalkine Media 는 눌러도 Cloudflare 에 막혀 못 읽는다). 판별·기록은 그대로
+                muted = source_muted(self.cfg, r.get("source", ""))
+                alert = (score >= self.cfg["threshold"] and not late and not muted
                          and not self.topic_alerted(topic, r.get("tickers", ""))
                          and not self.is_dup(r["title"]))
+                if muted and score >= self.cfg["threshold"] and not late:
+                    log(f"가린 언론사라 알리지 않음 ({r.get('source', '')}) {ko or r['title']}"[:90])
                 buzz = 0
-                if (not alert and self.cfg.get("buzz_sources") and score >= self.cfg.get("buzz_min_score", 5)
+                if (not alert and not muted and self.cfg.get("buzz_sources") and score >= self.cfg.get("buzz_min_score", 5)
                         and not late and not self.topic_alerted(topic, r.get("tickers", ""))
                         and not self.is_dup(r["title"])):
                     buzz = self.outlets(topic, r.get("tickers", ""), r.get("source", ""))
@@ -1588,8 +1592,13 @@ def suggest_keywords(watcher: Watcher, body: dict) -> dict:
             "keywords": words("keywords"), "exclude": words("exclude")}
 
 
+def source_muted(cfg: dict, source: str) -> bool:
+    """가린 언론사인가. 이름 갈래(`Kalkine Media` 와 `kalkinemedia.com`)는 source_key 로 합쳐 본다."""
+    return bool(source) and stocknews.source_key(source) in {stocknews.source_key(x) for x in cfg.get("hide_sources") or []}
+
+
 def hide_source(watcher: Watcher, body: dict) -> dict:
-    """언론사 성적표의 가리기/되살리기. 목록에서만 가린다 (판별·알림은 그대로)."""
+    """언론사 성적표의 가리기/되살리기. 목록에서 가리고 알림도 내지 않는다 (판별은 그대로)."""
     src = str(body.get("source") or "").strip()
     if not src:
         return {"ok": False, "msg": "언론사 이름이 없다"}
@@ -1824,7 +1833,7 @@ NAME_MAX = 50   # 언론사 성적표의 이름 칸 글자 수 (합친 이름 �
 
 
 def sources_page(watcher: Watcher) -> str:
-    """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서만 안 보인다."""
+    """언론사 성적표: 언론사마다 건수·평균 점수·알림 대상(기준 점수 이상)·👍/👎. 가리면 목록에서 안 보이고 알림도 안 온다."""
     muted = {stocknews.source_key(x) for x in watcher.cfg.get("hide_sources") or []}
     stats = sorted(group_sources(store.source_stats()), key=lambda r: -r["n"])
     th = watcher.cfg["threshold"]
@@ -1869,7 +1878,7 @@ ul.miss li{{margin:2px 0}} ul.miss a{{color:#e6e6e6;text-decoration:none}} ul.mi
 <h2 style="margin-top:22px">언론사 성적표</h2>
 <p class=why>{html.escape(first[:10])} 부터 판별한 {sum(r['n'] for r in stats)}건, 언론사 {len(stats)}곳 ·
 '알림' 은 {th}점 이상 · 👍·👎 는 🔔10·🔕0 포함, 뉴스마다 마지막 반응만 ·
-가린 언론사는 판별 목록에서만 안 보인다 (판별·알림은 그대로, '모두 보기' 로 볼 수 있다) · 머리글을 누르면 정렬</p>
+가린 언론사는 판별 목록에서 안 보이고 알림도 오지 않는다 (판별은 그대로, '모두 보기' 로 볼 수 있다) · 머리글을 누르면 정렬</p>
 <table id=t><thead><tr><th>{len(muted)}곳 가림</th><th>언론사</th><th>건수</th><th>평균 점수</th><th>알림</th><th>👍</th><th>👎</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 <script>
@@ -2050,7 +2059,7 @@ def row_html(r: dict, fb: dict, done: str, qs: str, gid: str = "", kids=(), chil
     # 언론사 이름표를 누르면 그 자리에서 목록에서 가린다 (가린 것은 '모두 보기' 에서 눌러 되살린다)
     off = stocknews.source_key(r.get("source", "")) in muted
     src = (f"<a class='src{' off' if off else ''}' data-src=\"{html.escape(source, quote=True)}\" data-off={int(off)} "
-           f"title='{'눌러서 이 언론사 되살리기' if off else '눌러서 이 언론사를 목록에서 가리기'}'>{html.escape(source)}</a>"
+           f"title='{'눌러서 이 언론사 되살리기' if off else '눌러서 이 언론사를 목록에서 가리고 알림도 끄기'}'>{html.escape(source)}</a>"
            if source else "")
     src = "".join(f"<a class=stk href='/?s={quote(t)}' title='{html.escape(t, quote=True)} 뉴스만 보기'>"
                   f"{html.escape(t)}</a>" for t in tickers_of(r)) + src
@@ -2625,7 +2634,7 @@ document.getElementById("list").addEventListener("click", async (e) => {{
     return;
   }}
   const badge = e.target.closest("a.src");
-  if (badge) {{   // 언론사 이름표: 목록에서 가리기 / 되살리기 (판별·알림은 그대로)
+  if (badge) {{   // 언론사 이름표: 목록에서 가리기 / 되살리기 (가리면 알림도 안 낸다)
     const off = badge.dataset.off === "1";
     if (!confirm(badge.dataset.src + (off ? " 를 목록에 되살릴까요?" : " 를 목록에서 가릴까요? (판별·알림은 그대로, 성적표에서 되살릴 수 있다)"))) return;
     const r = await fetch("/hide-source", {{method: "POST", headers: {{"X-Settings": "yes", "Content-Type": "application/json"}},
