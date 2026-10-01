@@ -2064,7 +2064,8 @@ def target_row(g: dict, stock: str = "") -> str:
 
 def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
     """목표가 표: 최근 days 일. 같은 조치를 여러 곳이 쓰면 한 줄 (targets.group).
-    order "" 는 종목마다 칸을 나눠 이름 순 (영어 A→Z 다음 한국 종목), "new" 는 모든 종목을 한 표에 최신순 (09-29 전하 분부)."""
+    order "" 는 모든 종목을 한 표에 최신순, "name" 은 종목마다 칸을 나눠 이름 순 (영어 A→Z 다음 한국 종목).
+    09-30 전하 분부로 최신순이 기본이 됐다 (전에는 이름 순이 기본, 최신순이 ?o=new)."""
     now = datetime.now(timezone.utc)
     stocks = load_stocks()
     # 공용 DB 에는 saveticker 가 뽑은 모든 회사가 있다. 관찰 종목만, 이름은 이쪽 이름으로 (티커로 맞춘다)
@@ -2085,7 +2086,7 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
     for gs in groups.values():
         for g in gs:
             count[g["action"]] = count.get(g["action"], 0) + 1
-    if order == "new":
+    if order != "name":
         flat = sorted(((g, name) for name, gs in groups.items() for g in gs), key=lambda x: x[0]["at"], reverse=True)
         cards = ([f"<div class=card><table>{''.join(target_row(g, name) for g, name in flat)}</table></div>"]
                  if flat else [])
@@ -2093,8 +2094,9 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
         cards = [f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
                  f" · {len(groups[name])}건</span></div><table>{''.join(target_row(g) for g in groups[name])}</table></div>"
                  for name in sorted(groups, key=str.lower)]
+    order = "name" if order == "name" else ""
     sort = " · ".join(f"<b>{label}</b>" if order == o else f"<a class=back href='/targets{'?o=' + o if o else ''}'>{label}</a>"
-                      for o, label in (("", "종목 이름 순"), ("new", "최신순")))
+                      for o, label in (("", "최신순"), ("name", "종목 이름 순")))
     checked, week = store.targets_checked(), (now - timedelta(days=7)).isoformat(timespec="seconds")
     todo = sum(1 for r in list(watcher.judged.values())
                if r["id"] not in checked and r.get("created_at", "") >= week and targets.is_candidate(r))
