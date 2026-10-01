@@ -2084,6 +2084,7 @@ def week_page(watcher: Watcher) -> str:
     """주간 리포트 페이지: 지난 7일, 종목별."""
     r = watcher.weekly_report()
     now = datetime.now(KST)
+    tg = target_groups(load_stocks(), 7)
     cards = []
     for st in sorted(r["stocks"], key=lambda x: (-x["alerts"], -x["news"])):
         pr = st["price"]
@@ -2103,6 +2104,7 @@ def week_page(watcher: Watcher) -> str:
                       + "</li>" for x in st["top"])
         cards.append(f"<div class=card><div><b>{html.escape(st['name'])}</b> <span class=why>{html.escape(st['ticker'])}</span> · {move}</div>"
                      f"<div class=why>뉴스 {st['news']}건 · 알림 {st['alerts']}건</div>"
+                     + week_targets_html(tg.get(st["name"], []))
                      + (f"<ul>{top}</ul>" if top else "") + "</div>")
     topics = " · ".join(f"{html.escape(t)} {n}건" for t, n in r["topics"]) or "없음"
     return f"""<!doctype html><meta charset=utf-8><title>주간 리포트 · 종목 뉴스 필터</title>
@@ -2254,26 +2256,44 @@ def target_row(g: dict, stock: str = "") -> str:
             f"<td class=nw>{news}</td></tr>")
 
 
+def target_groups(stocks: list, days: int) -> dict:
+    """{종목 이름: [한 줄로 합친 목표가 조치, 새것부터]} 최근 days 일. 목표가 표와 주간 리포트가 쓴다.
+    공용 DB 에는 saveticker 가 뽑은 모든 회사가 있다. 관찰 종목만, 이름은 이쪽 이름으로 (티커로 맞춘다)."""
+    by_ticker = {targets_db.ticker_key(s.get("yahoo", "")): s["name"] for s in stocks if s.get("yahoo")}
+    by_name = {s["name"].lower(): s["name"] for s in stocks}
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    by = {}
+    for r in store.read_targets(since):
+        name = by_ticker.get(r["ticker"] or "") or by_name.get((r["stock"] or "").lower())
+        at = parse_ts(r["created_at"])
+        if name and at:
+            by.setdefault(name, []).append(dict(r, stock=name, at=at))
+    return {name: targets.group(rs) for name, rs in by.items()}
+
+
+def week_targets_html(gs: list) -> str:
+    """주간 리포트 종목 칸의 목표가 한 줄: "목표가 5건 (상향 2 · 유지 3) · Baird 상향 $1,520 · …" (새것부터 넷)."""
+    if not gs:
+        return ""
+    count = {}
+    for g in gs:
+        count[g["action"]] = count.get(g["action"], 0) + 1
+    head = " · ".join(f"{a} {count[a]}" for a in targets.ACTIONS if count.get(a))
+    items = " · ".join(
+        f"{html.escape(g['broker'])} <b style='color:{TARGET_COLORS.get(g['action'], '#e6e6e6')}'>{g['action']}</b>"
+        + (f" {money(g['pt_new'], g['currency'])}" if g["pt_new"] else "") for g in gs[:4])
+    return (f"<div class=why><a href='/targets?o=name' style='text-decoration:underline'>목표가</a> {len(gs)}건 ({head}) · "
+            f"{items}{' · …' if len(gs) > 4 else ''}</div>")
+
+
 def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
     """목표가 표: 최근 days 일. 같은 조치를 여러 곳이 쓰면 한 줄 (targets.group).
     order "" 는 모든 종목을 한 표에 최신순, "name" 은 종목마다 칸을 나눠 이름 순 (영어 A→Z 다음 한국 종목).
     09-30 전하 분부로 최신순이 기본이 됐다 (전에는 이름 순이 기본, 최신순이 ?o=new)."""
     now = datetime.now(timezone.utc)
     stocks = load_stocks()
-    # 공용 DB 에는 saveticker 가 뽑은 모든 회사가 있다. 관찰 종목만, 이름은 이쪽 이름으로 (티커로 맞춘다)
-    by_ticker = {targets_db.ticker_key(s.get("yahoo", "")): s["name"] for s in stocks if s.get("yahoo")}
-    by_name = {s["name"].lower(): s["name"] for s in stocks}
-    rows = []
-    for r in store.read_targets((now - timedelta(days=days)).isoformat(timespec="seconds")):
-        name = by_ticker.get(r["ticker"] or "") or by_name.get((r["stock"] or "").lower())
-        if name:
-            rows.append(dict(r, stock=name, at=parse_ts(r["created_at"])))
-    by = {}
-    for r in rows:
-        if r["at"]:
-            by.setdefault(r["stock"], []).append(r)
     ticker = {s["name"]: s.get("yahoo", "") for s in stocks}
-    groups = {name: targets.group(rs) for name, rs in by.items()}
+    groups = by = target_groups(stocks, days)
     count = {}
     for gs in groups.values():
         for g in gs:
