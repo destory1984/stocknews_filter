@@ -128,7 +128,7 @@ def broker_key(name: str) -> str:
     "Citi" / "Citigroup", "RBC Capital" / "Royal Bank Of Canada", "DS투자증권" / "DS투자證"."""
     s = re.sub(r"[^\w]", "", (name or "").lower())
     while True:
-        t = re.sub(r"(securities|capital|markets|group|co|inc|llc|투자증권|증권|證)$", "", s)
+        t = re.sub(r"(securities|capital|markets|group|co|inc|llc|투자증권|투자證|증권|證)$", "", s)
         if t == s or not t:
             break
         s = t

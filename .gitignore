@@ -16,3 +16,4 @@ __pycache__/
 NOTES.md
 CLAUDE.md
 .playwright-mcp/
+.pytest_cache/
