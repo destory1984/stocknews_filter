@@ -2177,7 +2177,9 @@ async function targetsPng(limit) {
   box.style.cssText = "position:absolute;left:-99999px;top:0;box-sizing:border-box;padding:10px 12px;background:#16181c;color:" + bs.color +
     ";font:" + bs.font + ";width:" + (first.getBoundingClientRect().width + 24) + "px";
   const d = new Date(), head = document.createElement("div");
-  head.textContent = "목표가 표 · " + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  const fd = document.getElementById("tgd"), fk = document.getElementById("tgk");   // 골라 보기를 켰으면 머리글에 적는다
+  const pick = [fd && fd.value !== "0" ? fd.options[fd.selectedIndex].text : "", fk && fk.checked ? "유지·제시 뺌" : ""].filter(Boolean).join(", ");
+  head.textContent = "목표가 표 · " + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + (pick ? " (" + pick + ")" : "");
   head.style.cssText = "font-weight:700;margin:0 0 6px";
   box.appendChild(head);
   for (const el of document.querySelectorAll(".card, body > table.tg")) box.appendChild(el.cloneNode(true));
@@ -2186,6 +2188,14 @@ async function targetsPng(limit) {
     for (const x of box.querySelectorAll("[hidden]")) x.remove();   // 골라 보기로 감춘 줄
     [...box.querySelectorAll("tr")].forEach((tr, i) => { if (limit && i >= limit) tr.remove(); });
     for (const c of box.querySelectorAll(".card")) if (!c.querySelector("tr")) c.remove();
+    for (const dt of box.querySelectorAll("details")) {   // 그림에서는 "N곳" 을 펼칠 수 없으니 첫 기사 제목을 적는다
+      const lis = dt.querySelectorAll("li"), ul = document.createElement("ul");
+      if (!lis.length) continue;
+      ul.className = "one"; ul.appendChild(lis[0]);
+      const more = document.createElement("span");
+      more.className = "why"; more.textContent = " 외 " + (lis.length - 1) + "곳";
+      lis[0].appendChild(more); dt.replaceWith(ul);
+    }
     for (const a of box.querySelectorAll("a")) a.removeAttribute("href");
     const all = [...box.querySelectorAll("*")];
     const styles = all.map(el => { const cs = getComputedStyle(el); return CPY_PROPS.map(p => p + ":" + cs.getPropertyValue(p)).join(";"); });
