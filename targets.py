@@ -111,6 +111,17 @@ BROKER_ALIAS = {"jpmorganchase": "jpmorgan", "royalbankofcanada": "rbc", "bankof
                 "제프리스": "jefferies", "바클레이즈": "barclays", "도이치": "deutsche", "도이체방크": "deutsche",
                 "도이치방크": "deutsche", "deutschebank": "deutsche", "hsbc": "hsbc", "clsa": "clsa"}
 
+# 한국어로 적힌 외국 증권사 이름 더 (10-01 공용 DB 를 훑어 넣음: saveticker 는 한국어, stocknews_filter 는 영어 이름이 많다)
+BROKER_ALIAS.update({
+    "bnp파리바스": "bnpparibas", "bnp파리바": "bnpparibas", "베렌베르크": "berenberg", "모닝스타": "morningstar",
+    "오펜하이머": "oppenheimer", "웨드부시": "wedbush", "니덤": "needham", "미즈호": "mizuho", "베어드": "baird",
+    "레이먼드제임스": "raymondjames", "키뱅크": "keybanc", "로젠블랫": "rosenblatt", "로젠블라트": "rosenblatt",
+    "캔어코드제뉴이티": "canaccordgenuity", "아거스리서치": "argusresearch", "파이퍼샌들러": "pipersandler",
+    "에버코어": "evercore", "에버코어isi": "evercore", "evercoreisi": "evercore", "웰스파고": "wellsfargo",
+    "트루이스트": "truist", "스티펠": "stifel", "td코웬": "tdcowen", "구겐하임": "guggenheim", "캔터피츠제럴드": "cantorfitzgerald",
+    "캔터": "cantorfitzgerald", "cantor": "cantorfitzgerald", "da데이비슨": "dadavidson", "멜리우스": "melius",
+    "울프리서치": "wolferesearch", "번스타인소시에테제네랄": "bernstein", "뱅크오브아메리카메릴린치": "bofa", "bofa": "bofa"})
+
 
 def broker_key(name: str) -> str:
     """같은 증권사의 이름 갈래를 합친다: "JPMorgan" / "J.P. Morgan" / "JPMorgan Chase & Co.",
