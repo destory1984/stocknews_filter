@@ -2475,16 +2475,19 @@ def moves_html(watcher: Watcher, stock: str = "") -> str:
         title = "급등락 (최근 6시간)"
         if not items:
             return "<div id=moves></div>"
-    rows = []
+    rows, brief = [], []
     for m in items:
         at = datetime.fromisoformat(m["at"])
         color = "#e06c6c" if m["change"] > 0 else "#6c9be0"   # 한국식: 오르면 빨강, 내리면 파랑
-        news = "".join(f"<div class=mvn>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
+        brief.append(f"<span style='color:{color}'>{html.escape(m['ticker'])} {m['change']:+.1f}%</span>")
+        news ="".join(f"<div class=mvn>{x['score']}점 <a href=\"{html.escape(x['url'])}\" target=_blank>"
                        f"{html.escape(x['title'])}</a></div>" for x in m["news"]) or \
             "<div class=mvn>최근 2시간 안에 이 종목 뉴스가 없다</div>"
         rows.append(f"<div class=mv><b style='color:{color}'>{html.escape(m['ticker'])} 15분 {m['change']:+.1f}%</b> "
                     f"<span class=why>{at:%m-%d %H:%M} · {m['price']:.2f} · {html.escape(m['name'])}</span>{news}</div>")
-    return f"<div id=moves><div class=why>{title}</div>" + "".join(rows) + "</div>"
+    # 접을 수 있다. 접힌 줄에는 종목과 등락률만 보인다. 접은 상태는 이 브라우저에 기억한다 (기본은 편 상태)
+    return (f"<div id=moves><details id=mvd open><summary class=why>{title}"
+            f"<span class=mvs> · {' · '.join(brief)}</span></summary>" + "".join(rows) + "</details></div>")
 
 
 def earnings_line() -> str:
@@ -2547,7 +2550,7 @@ table{{border-collapse:collapse;width:100%}} td{{padding:6px 8px;border-bottom:1
 a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .why{{color:#8a9099;font-size:.86em}}
 .b,.t,.s{{width:1%;white-space:nowrap}} a.fb{{display:inline-block;margin-right:4px;padding:2px 5px;border-radius:6px;font-size:1.14em;opacity:.3;filter:grayscale(1)}} a.fb:hover{{opacity:.8}} a.fb.num{{font-weight:700;font-size:.93em;white-space:nowrap;text-align:center;color:#fff;background:#2a2d33}} a.fb.on{{opacity:1;filter:none;background:#3a4a6b;outline:1px solid #6d8fd6}} tr.hit{{background:#1d2a45}} tr.done{{background:#2a3d23}} a.rated{{color:#8a9099}} #list a[target=_blank]:not(.rated):visited{{color:#aab0b8}} .ok{{color:#8fd18f}} .warn{{color:#e0a44a;font-size:.93em}} .warn a{{color:#e0a44a;text-decoration:underline}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.79em}} a.src{{cursor:pointer}} a.src:hover{{background:#4a2f33;color:#e6e6e6}} a.src.off{{text-decoration:line-through;opacity:.7}} .stk{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#23382c;color:#9fd8b0;font-size:.79em}} a.stk:hover{{background:#2e4a3a}} a.sname{{color:#8a9099}} .cnt{{color:#6f7680}} .cnt b{{font-weight:400}} .cnt b.hi{{color:#e0a44a;font-weight:600}} a.sname:hover,a.sname.on{{color:#9fd8b0}} .filt{{margin:6px 0;padding:6px 10px;background:#23382c;border-radius:6px;color:#9fd8b0}} a.tog{{display:inline-block;margin-right:8px;padding:1px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} a.tog:hover{{background:#3a3f47}} .filt a.unfilt{{margin-left:10px;padding:2px 10px;border-radius:6px;background:#2a2d33;color:#e6e6e6;border:1px solid #3a3f47}} .filt a.unfilt:hover{{background:#3a3f47}} .tp{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2d2640;color:#c9b8ef;font-size:.79em}} .by{{font-size:.86em;font-weight:400;opacity:.75;margin-top:2px}} .by.cl{{color:#d97757}} .reset{{margin-top:24px}} .reset a{{color:#e0a44a;text-decoration:underline;cursor:pointer}} a.grp{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} tr.new td.t::before{{content:"● ";color:#8ab4f8}} .whypick{{margin-top:3px;font-size:.86em;color:#d9918f}} .whypick a.whyc{{display:inline-block;margin:0 4px 2px 0;padding:0 7px;border-radius:10px;background:#3a2a2c;color:#e6c3c1;cursor:pointer}} .whypick a.whyc:hover{{background:#5a3a3d}} .whyset{{margin-top:2px;font-size:.8em;color:#8a9099}} tr.child{{display:none}} tr.child.show{{display:table-row}} tr.child td{{background:#1b1e23}} tr.child td:nth-child(4){{padding-left:56px}}
 .old{{color:#e0a44a;font-size:.8em}} #earn .guess{{opacity:.55}} #moves .mv{{margin:4px 0 8px;padding:6px 10px;background:#1f2228;border-radius:6px}}
-#moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}}
+#moves .mvn{{font-size:.9em;margin:2px 0 0 12px}} #moves a{{color:#e6e6e6}} #mvd summary{{cursor:pointer}} #mvd[open] .mvs{{display:none}}
 #recent{{margin:6px 0 10px;padding:6px 10px;background:#1d2a45;border-radius:6px}} #recent:empty{{display:none}} .pro{{color:#8fc79a}} .con{{color:#d9918f;margin-left:4px}} #upd:empty{{display:none}}
 #recent .ra{{margin:2px 0}} #recent a{{color:#e6e6e6}} #earn{{margin:6px 0}} #earn summary{{cursor:pointer}} .sum{{display:none;color:#b8bec6;font-size:.9em;line-height:1.45;margin:2px 0 3px}} .sum.show{{display:block}} a.sumbtn,a.sumget{{margin-left:8px;color:#8ab4f8;cursor:pointer;text-decoration:underline}} a.sumget{{color:#8a9099}} h2{{margin:0;font-size:1.4em}} h2 small{{font-size:.65em;font-weight:400}}
 </style>
@@ -2601,6 +2604,7 @@ async function refresh() {{
       if (src && dst) dst.innerHTML = src.innerHTML;
     }}
     applyOpen();
+    applyMoves();
     document.getElementById("upd").textContent = "";   // 갱신 시각은 보이지 않는다. 연결이 끊겼을 때만 적는다
   }} catch (e) {{
     document.getElementById("upd").textContent = "판별기에 연결할 수 없습니다 (" + new Date().toLocaleTimeString("ko-KR", {{hour12: false}}) + ")";
@@ -2614,6 +2618,15 @@ if (earn) {{
   try {{ earn.open = localStorage.getItem("earnOpen") === "1"; }} catch (e) {{}}
   earn.addEventListener("toggle", () => {{ try {{ localStorage.setItem("earnOpen", earn.open ? "1" : "0"); }} catch (e) {{}} }});
 }}
+
+// 급등락 칸: 접어 두었으면 다음에도 접어 둔다. 15초마다 칸을 바꿔 끼우므로 그때마다 다시 맞춘다
+function applyMoves() {{
+  const d = document.getElementById("mvd");
+  if (!d) return;
+  try {{ d.open = localStorage.getItem("movesOpen") !== "0"; }} catch (e) {{}}
+  d.addEventListener("toggle", () => {{ try {{ localStorage.setItem("movesOpen", d.open ? "1" : "0"); }} catch (e) {{}} }});
+}}
+applyMoves();
 
 // 새 알림은 화면에 먼저 띄우고, 그다음 서버가 읽는다. 판 번호가 바뀌면 곧바로 다시 받는다.
 let ver = "{watcher.ver}";
