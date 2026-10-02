@@ -2556,6 +2556,7 @@ a{{color:#e6e6e6;text-decoration:none}} .s{{text-align:right;font-weight:600}} .
 </style>
 <header><h2>Google News/Yahoo Finance 종목 뉴스 필터링 크롤러 <small style="color:#8a9099">기준 {watcher.cfg['threshold']}점 · 파란 줄은 알림을 보낸 뉴스 · 점수 밑 🦙 Ollama / <span style="color:#d97757">✴</span> Claude 가 판별</small></h2>
   <span style="margin-left:auto"></span>
+  {settings.tts_switch(watcher.cfg)}
   <span class=fsz><button class=hbtn id=fsdown title="글자 작게" aria-label="글자 작게">가-</button><button class=hbtn id=fsup title="글자 크게" aria-label="글자 크게">가+</button></span>
   <button class=hbtn id=setbtn title="종목·알림·소리 설정" aria-expanded=false>⚙ 설정</button>
 </header>

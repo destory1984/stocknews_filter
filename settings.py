@@ -116,6 +116,12 @@ def _select(cfg: dict, key: str, aria: str) -> str:
             + "</select>")
 
 
+def tts_switch(cfg: dict) -> str:
+    """판별 목록 오른쪽 위, 글자 크기 단추 옆의 음성 스위치. 설정 창을 열지 않고 켜고 끈다."""
+    tip = "알림을 음성으로 읽는다: 말머리 소리 뒤에 「언론사, 제목」. 끄면 토스트 소리가 난다. 목소리·빠르기는 ⚙ 설정"
+    return f"<span class=ttsw title=\"{e(tip)}\">🔊 음성 {_switch(cfg, 'tts', '음성으로 읽기')}</span>"
+
+
 def row(label: str, control: str, tip: str = "") -> str:
     return f"<div class=mrow>{label}{control}</div>{_more(tip)}"
 
@@ -184,8 +190,7 @@ def menu(cfg: dict, stocks: list) -> str:
        "알림을 텔레그램으로도 보낸다. 봇 토큰과 대화방은 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 에서 읽는다 (RSI 모니터와 같은 것).")}
 
   <div class=mhead>소리 <small>꺼 둔 때도 알림 목록에는 쌓인다</small></div>
-  {row(_label("음성으로 읽기", "말머리 소리 뒤에 언론사와 제목을 읽는다", "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다."), _switch(cfg, "tts", "음성으로 읽기"),
-       "「언론사, 제목」 을 Edge 음성으로 읽는다 (예: 연합뉴스, SK하이닉스 손자회사 솔리다임 이르면 내년 美상장 검토). 영어 제목은 번역한 제목을 읽는다. 인터넷이 안 되면 윈도우 기본 음성으로 읽는다. 켜 두면 토스트 소리는 끈다.")}
+  <div class=mrow><small class=sub>음성 켜고 끄기는 오른쪽 위 🔊 음성 스위치. 「언론사, 제목」 을 Edge 음성으로 읽고, 인터넷이 안 되면 윈도우 기본 음성으로 읽는다</small></div>
   {row(_label("목소리"), _select(cfg, "tts_voice", "목소리"))}
   {row(_label("영어 언론사 목소리", "The Motley Fool 같은 영어 이름만"), _select(cfg, "tts_voice_en", "영어 언론사 목소리"))}
   {row(_label("빠르기"), _select(cfg, "tts_rate", "빠르기"))}
@@ -249,6 +254,7 @@ CSS = """
 header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .hbtn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:99px;padding:2px 9px;cursor:pointer;white-space:nowrap}
 .hbtn:hover{background:var(--sel)} .hbtn:disabled{opacity:.4;cursor:default}
+.ttsw{display:inline-flex;align-items:center;gap:5px;color:var(--muted);white-space:nowrap}
 .fsz{display:inline-flex} .fsz .hbtn:first-child{border-radius:99px 0 0 99px;border-right:0} .fsz .hbtn:last-child{border-radius:0 99px 99px 0}
 .menu{position:fixed;z-index:10;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 4px;box-shadow:0 4px 16px rgba(0,0,0,.4);display:grid;width:min(max(480px,calc(var(--fs) * 34)),calc(100vw - 16px));max-height:calc(100vh - 70px);overflow-y:auto;overflow-x:hidden}
 .menu[hidden],.menu [hidden]{display:none!important}
@@ -353,7 +359,8 @@ async function setKey(key, value) {
   say("#setmsg", d, d.ok ? "적용했다 · " + d.label : "");
   return d.ok;
 }
-document.querySelectorAll("#setmenu .switch[data-key]").forEach(sw => sw.onclick = async () => {
+// 음성 스위치는 설정 창 밖(오른쪽 위)에 있다
+document.querySelectorAll(".switch[data-key]").forEach(sw => sw.onclick = async () => {
   const on = sw.getAttribute("aria-checked") !== "true";
   if (await setKey(sw.dataset.key, on)) sw.setAttribute("aria-checked", on);
   if (sw.dataset.key === "quiet_on") quietInputs();
@@ -366,7 +373,7 @@ function quietInputs() {
   $("#qfrom").disabled = $("#qto").disabled = !on;
 }
 function ttsInputs() {
-  const on = $('#setmenu .switch[data-key="tts"]').getAttribute("aria-checked") === "true";
+  const on = $('.switch[data-key="tts"]').getAttribute("aria-checked") === "true";
   ["tts_voice", "tts_voice_en", "tts_rate", "tts_volume", "tts_chime"].forEach(k => $(`#setmenu [data-key="${k}"]`).disabled = !on);
 }
 $("#qfrom").onchange = $("#qto").onchange = () => setKey("tts_quiet", $("#qfrom").value + "-" + $("#qto").value);
