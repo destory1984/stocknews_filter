@@ -54,6 +54,25 @@ def test_alert_kind():
     assert a.alert_kind({"title": "Something else entirely", "reason": ""}) == "그 밖"
 
 
+# ── 이미 알린 소식 (판별 프롬프트에 넣는 줄) ────────────────────
+def test_known_lines_picks_recent_alerts_of_the_same_stock():
+    # 09-28 "엔비디아 자사주 1,500억 달러 승인" 을 10-01 에 "주가 2배 전망" 글로 또 9점에 알렸다 (10-02)
+    kst = timezone(timedelta(hours=9))
+    now = datetime(2026, 10, 1, 21, 0, tzinfo=kst)
+
+    def rec(i, hours_ago, stock, title, alerted=True):
+        return {"id": i, "at": (now - timedelta(hours=hours_ago)).isoformat(timespec="seconds"),
+                "tickers": stock, "title": title, "title_ko": "", "alerted": alerted}
+    recs = [rec("a", 70, "NVIDIA", "엔비디아, 자사주 매입 1500억 달러 승인"), rec("b", 5, "NVIDIA, Intel", "새 소식"),
+            rec("c", 100, "NVIDIA", "나흘 전 알림"), rec("d", 3, "NVIDIA", "알리지 않은 뉴스", alerted=False),
+            rec("e", 2, "Micron", "다른 종목"), rec("f", -1, "NVIDIA", "판별 시각 뒤의 알림")]
+    batch = [{"id": "x", "title": "예측: 엔비디아 주가 2배", "tickers": "NVIDIA"}]
+    lines = a.known_lines(recs, batch, now, 3)
+    assert lines == ["10-01 NVIDIA, Intel · 새 소식", "09-28 NVIDIA · 엔비디아, 자사주 매입 1500억 달러 승인"]
+    assert a.known_lines(recs, batch, now, 0) == []                              # 0 이면 끈다
+    assert a.known_lines(recs, [dict(batch[0], id="a")], now, 3) == lines[:1]   # 다시 판별하는 뉴스 자신은 뺀다
+
+
 # ── 언론사 이름 갈래 ────────────────────────────────────────
 def test_source_key_folds_name_variants():
     assert stocknews.source_key("MarketBeat") == stocknews.source_key("marketbeat.com")

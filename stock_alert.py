@@ -80,6 +80,9 @@ DEFAULTS = {
     # 같은 사건은 이 시간 안에 한 번만 알린다. 같은 종목이고 사건 이름의 낱말(회사 이름 뒤)이 겹치면 같은 사건으로 본다.
     # 1시간·같은 이름일 때 09-26 하루 35번 (마이크론 실적 예고만 10번 가까이) → 12시간·낱말 겹침으로 되돌려 보니 21번
     "topic_hours": 12,
+    # 판별할 때 지난 known_days 일 동안 알린 뉴스(같은 종목 것)를 함께 보여 준다. 며칠 전 일을 새 사실 없이 다시 쓴 글을
+    # 모델이 낮게 매기게 하려는 것이다 (10-02: 09-28 엔비디아 1,500억 달러 자사주 승인을 10-01 에 9점으로 또 알렸다). 0 이면 끔.
+    "known_days": 3,
     # 기준 점수에 못 미쳐도 6시간 안에 언론사 buzz_sources 곳 넘게 쓴 사건이면 알린다 (buzz_min_score 점 이상만, 0 이면 끔).
     # 09-27 까지 기록으로 되돌려 보면 하루 한 번쯤 (높은 점수 사건은 이미 알림이 나가서)
     "buzz_sources": 4,
@@ -156,6 +159,16 @@ reason 과 con 은 점수와 상관없이 둘 다 쓴다. 점수가 높으면 re
 
 [최근 사건 이름]
 {topics}
+
+이미 알린 소식:
+- [이미 알린 소식]은 지난 며칠 동안 이 사람에게 이미 알림을 보낸 뉴스다 (알린 날, 종목, 제목).
+- [새 뉴스]가 그 가운데 하나와 같은 일을 다시 쓴 글이고 새 사실이 없으면 3점 이하를 주고 con 에 "이미 알린 소식" 이라고 써라.
+  며칠 전 발표·결정을 돌아보거나 풀이·전망만 덧붙인 글, 지난 분기 실적을 다시 정리한 글이 여기에 든다.
+- 새 사실이 있으면 깎지 마라. 새 숫자, 확정·무산, 새 당사자, 그 일로 오늘 주가가 크게 움직였다는 소식이 새 사실이다.
+  다른 증권사가 낸 목표가·투자의견은 같은 종목이어도 새 소식이다. 같은 종목의 다른 일도 깎지 마라.
+
+[이미 알린 소식]
+{known}
 
 [새 뉴스]
 {news}
@@ -419,13 +432,33 @@ def parse_results(text: str, batch: list) -> dict:
     return out
 
 
-def judge(cfg: dict, batch: list, topics: list = ()) -> tuple:
-    """({id: (score, reason, topic, say, ko, sum, con)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름."""
+def stock_set(tickers: str) -> set:
+    return {t.strip() for t in (tickers or "").split(",") if t.strip()}
+
+
+def known_lines(recs: list, batch: list, now: datetime, days: float, cap: int = 60) -> list:
+    """판별 프롬프트의 [이미 알린 소식]: 지난 days 일 동안 알린 뉴스 가운데 batch 와 종목이 겹치는 것, 새것부터 cap 줄.
+    'MM-DD 종목 · 제목'. batch 에 든 뉴스 자신은 뺀다 (다시 판별할 때)."""
+    if not days:
+        return []
+    want = set().union(*(stock_set(r.get("tickers")) for r in batch)) if batch else set()
+    ids = {r["id"] for r in batch}
+    lo, hi = (now - timedelta(days=days)).isoformat(timespec="seconds"), now.isoformat(timespec="seconds")
+    hits = [r for r in recs if r.get("alerted") and r["id"] not in ids and lo <= r.get("at", "") < hi
+            and stock_set(r.get("tickers")) & want]
+    hits.sort(key=lambda r: r["at"], reverse=True)
+    return [f"{r['at'][5:10]} {r.get('tickers', '')} · {r.get('title_ko') or r['title']}" for r in hits[:cap]]
+
+
+def judge(cfg: dict, batch: list, topics: list = (), known: list = ()) -> tuple:
+    """({id: (score, reason, topic, say, ko, sum, con)}, 판별한 쪽 이름). topics 는 최근에 붙인 사건 이름,
+    known 은 이미 알린 뉴스 줄 (known_lines)."""
     prompt = PROMPT.format(
         interests=INTERESTS.read_text(encoding="utf-8") if INTERESTS.exists() else "(없음)",
         stocks=", ".join(f"{x['name']} ({x['yahoo']})" if x.get("yahoo") else x["name"] for x in load_stocks()) or "(없음)",
         examples=examples_text(cfg["examples"]),
         topics="\n".join(topics) or "(없음)",
+        known="\n".join(known) or "(없음)",
         news="\n".join(f"{i}. {news_line(r)}" for i, r in enumerate(batch, 1)),
     )
     backend = cfg["backend"]
@@ -1243,7 +1276,8 @@ class Watcher:
                 return
             t0 = time.time()
             try:
-                result, by = judge(self.cfg, batch, self.recent_topics())
+                known = known_lines(list(self.judged.values()), batch, datetime.now(KST), self.cfg.get("known_days", 0))
+                result, by = judge(self.cfg, batch, self.recent_topics(), known)
             except Exception as e:   # 모델이 바쁘거나 꺼져 있으면 다음 차례에 다시
                 log(f"판별 실패: {e}")
                 return
