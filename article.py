@@ -121,24 +121,48 @@ def extract(page: str) -> str:
 def published(page: str):
     """기사 페이지에 적힌 처음 나온 시각 (datetime, UTC). 못 찾으면 None.
     구글 뉴스 RSS 는 옛 기사에 새 날짜를 붙여 다시 올리기도 해서, 원문에 적힌 날짜를 믿는다."""
-    pats = (r'"datePublished"\s*:\s*"([^"]+)"',
-            r'(?:property|name|itemprop)="(?:article:published_time|datePublished|pubdate|publishdate)"[^>]*content="([^"]+)"',
-            r'content="([^"]+)"[^>]*(?:property|name|itemprop)="(?:article:published_time|datePublished)"')
-    for pat in pats:
-        m = re.search(pat, page)
-        if not m:
-            continue
-        v = m.group(1).strip().replace("Z", "+00:00")
-        v = re.sub(r"([+-]\d\d)(\d\d)$", lambda m: m.group(1) + ":" + m.group(2), v)   # +0900 → +09:00
-        try:
-            dt = datetime.fromisoformat(v)
-        except ValueError:
-            continue
-        if dt.tzinfo is None:   # 시간대가 없으면 한국 사이트가 대부분이라 KST 로 본다
-            from datetime import timedelta
-            dt = dt.replace(tzinfo=timezone(timedelta(hours=9)))
-        return dt.astimezone(timezone.utc)
+    found = [m.group(1) for m in re.finditer(r'"datePublished"\s*:\s*"([^"]+)"', page)]
+    metas = {}
+    for tag in re.findall(r"(?is)<meta\b[^>]*>", page):
+        at = {k.lower(): a or b for k, a, b in re.findall(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""", tag)}
+        name = (at.get("property") or at.get("name") or at.get("itemprop") or "").lower()
+        if name in META_DATES and at.get("content"):
+            metas.setdefault(name, at["content"])
+    found += [metas[n] for n in META_DATES if n in metas]
+    # 기사가 아닌 틀(동영상 등)의 처음 올린 때. 고친 시각(dateModified)은 처음 나온 때가 아니라 쓰지 않는다
+    found += [m.group(1) for m in re.finditer(r'"(?:dateCreated|uploadDate)"\s*:\s*"([^"]+)"', page)]
+    for v in found:
+        dt = _when(v)
+        if dt:
+            return dt
     return None
+
+
+# 처음 나온 때를 적는 meta 이름 (앞의 것부터 믿는다). og:regdate 는 다음 뉴스 (숫자 14자리, 한국 시각)
+META_DATES = ("article:published_time", "og:article:published_time", "datepublished", "pubdate", "publishdate",
+              "publish-date", "og:regdate", "parsely-pub-date", "sailthru.date", "article.published",
+              "dc.date.issued", "dcterms.created", "date")
+
+
+def _when(v: str):
+    """날짜 글 → datetime(UTC). 못 읽으면 None. ISO, 숫자 14자리, 'Thu, 01 Oct 2026 12:00:00 GMT' 꼴을 읽는다."""
+    from datetime import timedelta
+    from email.utils import parsedate_to_datetime
+    v = html.unescape(v).strip()
+    try:
+        if re.fullmatch(r"\d{14}", v):
+            dt = datetime.strptime(v, "%Y%m%d%H%M%S")
+        elif re.match(r"[A-Za-z]{3},", v):
+            dt = parsedate_to_datetime(v)
+        else:
+            v = v.replace("Z", "+00:00")
+            v = re.sub(r"([+-]\d\d)(\d\d)$", lambda m: m.group(1) + ":" + m.group(2), v)   # +0900 → +09:00
+            dt = datetime.fromisoformat(v)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:   # 시간대가 없으면 한국 사이트가 대부분이라 KST 로 본다
+        dt = dt.replace(tzinfo=timezone(timedelta(hours=9)))
+    return dt.astimezone(timezone.utc)
 
 
 def fetch_body(url: str) -> tuple:

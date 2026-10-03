@@ -1314,8 +1314,13 @@ class Watcher:
                     try:
                         _, pub = self.summarizer.fetch_article(r, urgent=True)
                         self.summarizer.dated.add(r["id"])
-                    except (article.Busy, article.Skip, requests.RequestException):
-                        pass
+                        if not pub:
+                            log(f"원문 날짜 못 봄 ({r.get('source', '')}: 페이지에 날짜 표기 없음)")
+                    except (article.Busy, article.Skip) as e:
+                        # 까닭을 남겨야 어느 곳이 왜 안 읽히는지 셀 수 있다 (10-03: 알림 300번 중 104번이 까닭 모르게 날짜 없이 나갔다)
+                        log(f"원문 날짜 못 봄 ({r.get('source', '')}: {e})")
+                    except requests.RequestException as e:
+                        log(f"원문 날짜 못 봄 ({r.get('source', '')}: {type(e).__name__})")
                     if self.summarizer.is_stale(pub):
                         alert = False
                         log(f"옛 기사라 알리지 않음 (원문 {pub:%Y-%m-%d}) {ko or r['title']}"[:90])
