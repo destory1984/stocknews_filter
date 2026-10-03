@@ -39,6 +39,18 @@ def test_json_ld_fallbacks():
     assert article.published('<meta property="article:modified_time" content="2026-10-03T12:00:00Z">') is None
 
 
+def test_breakingthenews_api_answer():
+    # 페이지가 빈 틀이라 본문과 날짜를 그 사이트의 /api/article 에서 받는다. 시각은 시간대 없이 UTC 로 온다
+    data = {"NewsArticle": {"@id": "67226852", "@dateTime": "2026-10-02T19:25:00",
+                            "Article": {"#cdata-section": "<p>SpaceX's stock surged.</p><p>Second paragraph.</p>"}}}
+    body, pub = article.btn_article(data)
+    assert body == "SpaceX's stock surged. Second paragraph."
+    assert pub == utc(2026, 10, 2, 19, 25)
+    assert article.btn_article({}) == ("", None)
+    assert article.BTN_RE.match("https://breakingthenews.net/Article/SpaceX-jumps-7.6-as-Musk/67226852").group(1) == "67226852"
+    assert not article.BTN_RE.match("https://breakingthenews.net/news-feed.xml")
+
+
 def test_bad_values_are_skipped():
     assert article.published('<meta name="date" content="어제"><meta property="og:regDate" content="20261003190110">') == utc(2026, 10, 3, 10, 1, 10)
     assert article.published('<meta name="date" content="20269999999999">') is None

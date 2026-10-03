@@ -165,6 +165,24 @@ def _when(v: str):
     return dt.astimezone(timezone.utc)
 
 
+# breakingthenews.net 은 페이지가 빈 틀(<div id="root">)이라 본문도 날짜도 없다. 그 사이트의 화면이 쓰는
+# /api/article 에 기사 번호를 보내면 본문과 올린 시각(UTC)이 온다 (10-03: 알림 2번이 날짜 없이 나갔다)
+BTN_RE = re.compile(r"^https?://(?:www\.)?breakingthenews\.net/Article/[^/?#]+/(\d+)", re.I)
+BTN_API = "https://breakingthenews.net/api/article"
+
+
+def btn_article(data: dict) -> tuple:
+    """breakingthenews.net /api/article 응답 → (본문, 처음 나온 시각 또는 None)."""
+    a = data.get("NewsArticle") or {}
+    body = a.get("Article")
+    if isinstance(body, dict):
+        body = body.get("#cdata-section")
+    when = str(a.get("@dateTime") or "")
+    if when and not re.search(r"(Z|[+-]\d\d:?\d\d)$", when):
+        when += "+00:00"   # 시간대 없이 UTC 로 적는다 (기사에 "3:05 pm ET" 라 쓴 글이 19:25 로 찍혔다)
+    return _text(body or "")[:4000], _when(when) if when else None
+
+
 def fetch_body(url: str) -> tuple:
     """(원문 주소, 본문, 처음 나온 시각 또는 None). 막히거나 비었으면 Skip."""
     real = decode_google(url)
@@ -172,6 +190,18 @@ def fetch_body(url: str) -> tuple:
         raise Skip("원문 사이트가 자동 접속을 막음")
     if not allowed(real):
         raise Skip("robots.txt 가 막음")
+    m = BTN_RE.match(real)
+    if m:
+        if not allowed(BTN_API):
+            raise Skip("robots.txt 가 막음")
+        r = requests.post(BTN_API, json={"NewsID": m.group(1)}, headers=HEADERS, timeout=TIMEOUT)
+        if r.status_code >= 400:
+            raise Skip(f"HTTP {r.status_code}")
+        try:
+            body, pub = btn_article(r.json())
+        except ValueError:
+            raise Skip("본문을 읽지 못함")
+        return real, body, pub
     r = requests.get(real, headers=HEADERS, timeout=TIMEOUT)
     if r.status_code >= 400:
         raise Skip(f"HTTP {r.status_code}")

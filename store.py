@@ -59,13 +59,8 @@ create table if not exists targets (          -- 목표가·투자의견 뉴스�
 create table if not exists moves (
     n integer primary key autoincrement, at text, ticker text, name text,
     change real, price real, news text);     -- news: 원인 후보 [{title, url, score}] JSON
-create table if not exists mb_ratings (       -- MarketBeat 목표가 변경 (확장이 사용자 탭에서 읽어 보낸 것)
-    id text primary key,                       -- MarketBeat 의 변경 번호 (details/<id>)
-    first_seen text, last_seen text,           -- 처음·마지막으로 표에서 본 시각 (UTC)
-    baseline int,                              -- 1 이면 측정을 시작할 때 이미 있던 줄 (속도 재기에서 뺀다)
-    ticker text, company text, action text, brokerage text, analyst text, price text,
-    pt_old text, pt_new text, rating_old text, rating_new text, page_refreshed text);
 """
+# 옛 DB 에는 mb_ratings 표가 남아 있을 수 있다 (MarketBeat 목표가 변경 속도 재기, 2026-10-03 에 걷어냄). 쓰지 않고 지우지도 않는다.
 
 _local = threading.local()
 _write = threading.Lock()
@@ -97,12 +92,6 @@ def _commit(sql: str, args=(), many=False) -> int:
         cur = c.executemany(sql, args) if many else c.execute(sql, args)
         c.commit()
         return cur.rowcount
-
-
-def mb_last() -> str:
-    """확장이 MarketBeat 표를 마지막으로 보낸 시각 (ISO, UTC). 한 번도 없으면 ""."""
-    row = con().execute("select max(last_seen) from mb_ratings").fetchone()
-    return row[0] or "" if row else ""
 
 
 def get_meta(k: str, default: str = "") -> str:
@@ -243,33 +232,6 @@ def latest_feedback() -> dict:
 def set_why(nid: str, why: str):
     """그 뉴스의 마지막 반응에 까닭을 적는다."""
     _commit("update feedback set why = ? where n = (select max(n) from feedback where id = ?)", (why, nid))
-
-
-# ─────────────────────────────────────────────────────────────
-# MarketBeat 목표가 변경 (속도 재기)
-# ─────────────────────────────────────────────────────────────
-
-MB_COLS = ["ticker", "company", "action", "brokerage", "analyst", "price",
-           "pt_old", "pt_new", "rating_old", "rating_new"]
-
-
-def add_mb(rows: list, refreshed: str) -> int:
-    """표의 줄을 넣는다. 처음 본 줄은 first_seen 을 지금으로, 이미 있던 줄은 last_seen 만 바꾼다.
-    표를 처음 받을 때(아직 아무 줄도 없을 때) 들어온 줄은 baseline 으로 표시한다. 새 줄 수를 돌려준다."""
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    c = con()
-    baseline = int(c.execute("select count(*) from mb_ratings").fetchone()[0] == 0)
-    have = {r[0] for r in c.execute("select id from mb_ratings")}
-    new = [r for r in rows if str(r.get("id")) not in have]
-    with _write:
-        c.executemany(
-            f"insert into mb_ratings (id, first_seen, last_seen, baseline, {', '.join(MB_COLS)}, page_refreshed) "
-            f"values (?, ?, ?, ?, {', '.join('?' * len(MB_COLS))}, ?)",
-            [(str(r["id"]), now, now, baseline, *(str(r.get(k, ""))[:120] for k in MB_COLS), refreshed[:80])
-             for r in new])
-        c.executemany("update mb_ratings set last_seen=? where id=?", [(now, str(r["id"])) for r in rows])
-        c.commit()
-    return len(new)
 
 
 # ─────────────────────────────────────────────────────────────
