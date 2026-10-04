@@ -2310,6 +2310,23 @@ def target_row(g: dict, stock: str = "") -> str:
             f"<td class=nw>{news}</td></tr>")
 
 
+def consensus_html(gs: list, ticker: str, prices: dict) -> str:
+    """종목별 표의 종목 칸 머리에 붙는 한 줄: 평균 목표가(증권사 수, 최저 → 최고) · 현재가 · 괴리율.
+    괴리율은 평균 목표가가 현재가보다 얼마나 높은가다. 현재가를 못 받았거나 통화가 다르면 평균만 보인다."""
+    c = targets.consensus(gs)
+    if not c:
+        return ""
+    cur = c["currency"]
+    out = f"평균 목표가 <b style='color:#e6e6e6'>{money(c['avg'], cur)}</b> ({c['n']}곳"
+    out += f", {money(c['low'], cur)} → {money(c['high'], cur)})" if c["n"] > 1 else ")"
+    price = prices.get(ticker)
+    if price and cur == ("KRW" if ticker[:1].isdigit() else "USD"):
+        gap = targets.gap_pct(c["avg"], price[0])
+        out += (f" · 현재가 {money(price[0], cur)} <span class=pct>({price[1].astimezone(KST):%m-%d %H:%M})</span>"
+                f" · 괴리율 <b style='color:{'#e06c6c' if gap >= 0 else '#6c9be0'}'>{gap:+.1f}%</b>")
+    return f"<div class='why cs'>{out}</div>"
+
+
 def target_groups(stocks: list, days: int) -> dict:
     """{종목 이름: [한 줄로 합친 목표가 조치, 새것부터]} 최근 days 일. 목표가 표와 주간 리포트가 쓴다.
     공용 DB 에는 saveticker 가 뽑은 모든 회사가 있다. 관찰 종목만, 이름은 이쪽 이름으로 (티커로 맞춘다)."""
@@ -2362,8 +2379,10 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
         # 종목별 표에는 증권사마다 가장 새 조치만 (10-04 전하 분부). 최신순 표는 모든 줄을 그대로 둔다
         last = {name: targets.latest_per_broker(gs) for name, gs in groups.items()}
         older = lambda name: len(groups[name]) - len(last[name])
+        prices = moves.last_prices(ticker.get(name) for name in groups)   # 야후, 5분 묵혀 씀. 못 받으면 평균만 보인다
         cards = [f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
                  f" · {len(last[name])}건{f' (같은 증권사의 앞선 조치 {older(name)}건 뺌)' if older(name) else ''}</span></div>"
+                 f"{consensus_html(groups[name], ticker.get(name, ''), prices)}"
                  f"<table>{''.join(target_row(g) for g in last[name])}</table></div>"
                  for name in sorted(groups, key=str.lower)]
     order = "name" if order == "name" else ""
@@ -2383,7 +2402,7 @@ table{{border-collapse:collapse;width:100%;margin-top:4px}} td{{padding:3px 8px 
 .sort{{margin:4px 0}} td.sk{{white-space:nowrap;font-weight:600;min-width:8em}} td.d,td.br,td.ac,td.pt,td.rt,td.bl{{white-space:nowrap}} td.d{{color:#8a9099;font-size:.9em;min-width:5.5em}} td.br{{min-width:9em}} td.ac{{min-width:4.5em}} td.pt{{min-width:13em}} td.rt{{min-width:5em}} td.bl{{min-width:1.5em}} td.nw{{width:100%;font-size:.9em}}
 .pct{{color:#8a9099;font-size:.9em}} ul{{margin:0;padding-left:18px}} ul.one{{list-style:none;padding:0}}
 summary{{cursor:pointer;color:#8ab4f8}} .src{{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:#2a2d33;color:#b8bec6;font-size:.8em}}
-.back{{color:#8ab4f8}}
+.back{{color:#8ab4f8}} .cs{{margin:2px 0}}
 html.nar body{{max-width:660px;margin:8px}} html.nar .card{{padding:6px 8px}}
 html.nar table,html.nar table tbody{{display:block}}
 html.nar table tr{{display:grid;grid-template-columns:6.2em 9.5em 4.6em 1fr 4.6em;column-gap:8px;padding:5px 0;border-top:1px solid #2a2d33}}
@@ -2411,7 +2430,7 @@ addEventListener("DOMContentLoaded",()=>{{
 <p class=sort>정렬: {sort} <a id=tgw></a> <a id=cpy>그림으로 복사</a> <select id=cpyn><option value=20>위 20줄<option value=40>위 40줄<option value=0>전체</select> <span id=cpymsg class=why></span></p>
 <p class=sort>보기: <select id=tgd><option value=0>30일 전체<option value=1>오늘<option value=3>3일<option value=7>7일</select> <label><input type=checkbox id=tgk> 유지·제시 빼기</label> <span id=tgc class=why></span></p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama, 꺼져 있으면 Claude)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
-같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{" 종목 이름 순 표에는 증권사마다 가장 새 조치만 보인다 (앞선 조치는 최신순 표에). 새 조치의 제목에 목표가가 없으면 그 증권사의 앞선 목표가를 적었다." if order == "name" else ""}{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
+같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{" 종목 이름 순 표에는 증권사마다 가장 새 조치만 보인다 (앞선 조치는 최신순 표에). 새 조치의 제목에 목표가가 없으면 그 증권사의 앞선 목표가를 적었다. 평균 목표가는 증권사마다 가장 새 목표가 하나씩의 평균이고, 괴리율은 평균 목표가가 현재가(야후, 장 전·장 뒤 포함)보다 얼마나 높은가다." if order == "name" else ""}{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
 <p class=why>목표가 소식 없음: {html.escape(", ".join(empty)) or "없음"}</p>"""
 

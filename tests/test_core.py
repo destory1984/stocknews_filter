@@ -173,6 +173,16 @@ def test_latest_per_broker_keeps_only_the_newest_line():
     assert targets.broker_key("Melius Research") == targets.broker_key("Melius")
 
 
+def test_consensus_counts_each_broker_once():
+    # Goldman Sachs 는 새 목표가($1,250)만 센다. 목표가 없는 줄은 빠진다
+    rows = [_row("Goldman Sachs", "상향", 1250, 0), _row("Baird", "유지", 1520, 5), _row("Goldman Sachs", "유지", 1100, 60),
+            _row("Melius", "유지", None, 70)]
+    c = targets.consensus(targets.group(rows))
+    assert (c["n"], c["avg"], c["low"], c["high"], c["currency"]) == (2, 1385, 1250, 1520, "USD")
+    assert targets.consensus(targets.group([_row("Melius", "유지", None, 0)])) is None
+    assert round(targets.gap_pct(1385, 1069.15), 1) == 29.5 and targets.gap_pct(1385, None) is None
+
+
 # ── 목표가 공용 DB ─────────────────────────────────────────
 def test_ticker_key():
     assert targets_db.ticker_key("005930.KS") == "005930"

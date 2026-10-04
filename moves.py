@@ -8,6 +8,7 @@ moves.py — 종목이 15분 사이에 크게 움직였는지 본다 (야후 5�
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 WINDOW_BARS = 3          # 5분봉 3개 = 15분
@@ -44,6 +45,37 @@ def check(tickers, pct_for) -> list:
         if abs(change) >= pct_for(t):
             out.append((t, change, cur, before))
     return out
+
+
+PRICE_KEEP_SEC = 300     # 목표가 표가 쓰는 현재가는 이만큼 묵혀 쓴다 (표를 열 때마다 야후에 묻지 않게)
+_prices = {"key": None, "at": 0.0, "data": {}}
+
+
+def last_prices(tickers) -> dict:
+    """{티커: (마지막 값, 그 시각)} 야후 5분봉의 마지막 봉 (장 전·장 뒤 포함, 주말이면 금요일 장 뒤 값).
+    한국 종목(005930.KS)도 받는다. 받지 못한 티커는 빠진다. 야후가 안 되면 묵은 값이나 빈 것을 준다."""
+    tickers = sorted({t for t in tickers if t})
+    if not tickers:
+        return {}
+    if _prices["key"] == tickers and time.time() - _prices["at"] < PRICE_KEEP_SEC:
+        return _prices["data"]
+    try:
+        import yfinance as yf
+        df = yf.download(tickers, period="5d", interval="5m", prepost=True, progress=False,
+                         auto_adjust=False, group_by="ticker", threads=True)
+    except Exception:
+        return _prices["data"] if _prices["key"] == tickers else {}
+    out = {}
+    for t in tickers:
+        try:
+            close = df[t]["Close"].dropna()
+            if len(close):
+                out[t] = (float(close.iloc[-1]), close.index[-1].to_pydatetime())
+        except (KeyError, TypeError, ValueError):
+            continue
+    if out or _prices["key"] != tickers:
+        _prices.update(key=tickers, at=time.time(), data=out)
+    return _prices["data"]
 
 
 REACT_MIN = 60           # 알림 뒤 이만큼 지난 값과 견준다

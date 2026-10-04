@@ -122,6 +122,23 @@ BROKER_ALIAS.update({
     "캔터": "cantorfitzgerald", "cantor": "cantorfitzgerald", "da데이비슨": "dadavidson", "멜리우스": "melius",
     "울프리서치": "wolferesearch", "번스타인소시에테제네랄": "bernstein", "뱅크오브아메리카메릴린치": "bofa", "bofa": "bofa"})
 
+def consensus(groups: list):
+    """한 종목의 목표가 평균: {"n": 증권사 수, "avg", "low", "high", "currency"}. 목표가가 없으면 None.
+    증권사마다 가장 새 목표가 하나씩만 센다 (latest_per_broker). 통화가 섞여 있으면 가장 많은 통화만 센다."""
+    rows = [g for g in latest_per_broker(groups) if g["pt_new"]]
+    if not rows:
+        return None
+    curs = [g["currency"] for g in rows]
+    cur = max(dict.fromkeys(curs), key=curs.count)
+    pts = [g["pt_new"] for g in rows if g["currency"] == cur]
+    return {"n": len(pts), "avg": sum(pts) / len(pts), "low": min(pts), "high": max(pts), "currency": cur}
+
+
+def gap_pct(avg: float, price: float):
+    """괴리율(%): 평균 목표가가 현재가보다 얼마나 높은가. 현재가 100, 평균 목표가 120 이면 +20."""
+    return (avg / price - 1) * 100 if avg and price else None
+
+
 # 줄여 쓴 이름 (10-04 종목별 표의 Micron 에 "Goldman" 과 "Goldman Sachs", "Melius" 와 "Melius Research" 가 따로 나왔다)
 BROKER_ALIAS.update({"goldman": "goldmansachs", "골드만": "goldmansachs", "meliusresearch": "melius"})
 
