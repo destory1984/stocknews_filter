@@ -3,8 +3,9 @@
 The target table lives in both alerters: `targets_db.py` is the same file in both repos, and the page
 scripts `COPY_IMG` (copy as image) and `TG_FILTER` (period / hide-maintained filter) are the same text
 inside stock_alert.py and news_alert.py. `targets.py` differs between the repos, but the function
-`latest_per_broker` (one line per broker in the by-name table) must have the same code in both;
-its docstring and comments may differ. Change one side only and the two tables stop matching.
+`latest_per_broker` (one line per broker in the by-name table), `consensus` and `gap_pct` (average
+target and its gap to the price) must have the same code in both; docstrings and comments may differ.
+Change one side only and the two tables stop matching.
 
     python tools/check_shared.py [path to the saveticker_filter checkout]   # default: ../saveticker
 """
@@ -39,7 +40,7 @@ mine, theirs = (here / "stock_alert.py").read_text(encoding="utf-8"), (other / "
 pairs = [("targets_db.py", (here / "targets_db.py").read_text(encoding="utf-8"), (other / "targets_db.py").read_text(encoding="utf-8"))]
 pairs += [(name, const(mine, name), const(theirs, name)) for name in ("COPY_IMG", "TG_FILTER")]
 pairs += [(f"targets.{name}", func((here / "targets.py").read_text(encoding="utf-8"), name),
-           func((other / "targets.py").read_text(encoding="utf-8"), name)) for name in ("latest_per_broker",)]
+           func((other / "targets.py").read_text(encoding="utf-8"), name)) for name in ("latest_per_broker", "consensus", "gap_pct")]
 bad = 0
 for name, a, b in pairs:
     if not a or not b:

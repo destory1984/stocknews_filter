@@ -2318,7 +2318,7 @@ def consensus_html(gs: list, ticker: str, prices: dict) -> str:
         return ""
     cur = c["currency"]
     out = f"평균 목표가 <b style='color:#e6e6e6'>{money(c['avg'], cur)}</b> ({c['n']}곳"
-    out += f", {money(c['low'], cur)} → {money(c['high'], cur)})" if c["n"] > 1 else ")"
+    out += f", {money(c['low'], cur)} → {money(c['high'], cur)})" if c["low"] != c["high"] else ")"
     price = prices.get(ticker)
     if price and cur == ("KRW" if ticker[:1].isdigit() else "USD"):
         gap = targets.gap_pct(c["avg"], price[0])
