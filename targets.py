@@ -164,10 +164,19 @@ def group(rows: list, days: int = 2) -> list:
 
 def latest_per_broker(groups: list) -> list:
     """한 종목의 줄들(새것부터)에서 증권사마다 가장 새 줄만 남긴다. 종목별 표가 쓴다.
-    10-04 Micron 35줄 가운데 Goldman Sachs 가 둘($1,100 유지 → 다음 날 $1,250)처럼 겹친 증권사가 6곳이었다."""
-    seen, out = set(), []
+    10-04 Micron 35줄 가운데 Goldman Sachs 가 둘($1,100 유지 → 다음 날 $1,250)처럼 겹친 증권사가 6곳이었다.
+    새 줄에 목표가가 없으면 그 증권사의 앞선 줄에서 채운다 (JP Morgan "유지" 뒤에 사흘 전 "상향 $1,540" 이 가려졌다).
+    새 줄이 상향·하향이면 채우지 않는다. 앞선 목표가는 바뀌기 전 값이다. 투자의견은 유지·제시·신규일 때만 채운다."""
+    out, where = [], {}
     for g in groups:
-        if g["key"] not in seen:
-            seen.add(g["key"])
-            out.append(g)
+        i = where.get(g["key"])
+        if i is None:
+            where[g["key"]] = len(out)
+            out.append(dict(g))
+            continue
+        new = out[i]
+        if new["pt_new"] is None and g["pt_new"] is not None and new["action"] not in ("상향", "하향"):
+            new["pt_new"], new["currency"] = g["pt_new"], g["currency"]
+        if not new["rating"] and g["rating"] and new["action"] in ("유지", "제시", "신규"):
+            new["rating"] = g["rating"]
     return out

@@ -164,7 +164,11 @@ def test_latest_per_broker_keeps_only_the_newest_line():
     rows = [_row("Goldman Sachs", "유지", 1250, 0), _row("JP Morgan", "유지", None, 5), _row("Goldman Sachs", "유지", 1100, 20),
             _row("JPMorgan", "상향", 1540, 24 * 3)]
     g = targets.latest_per_broker(targets.group(rows))
-    assert [(x["broker"], x["pt_new"]) for x in g] == [("Goldman Sachs", 1250), ("JP Morgan", None)]
+    # 새 줄에 목표가가 없으면 앞선 줄의 것을 적는다
+    assert [(x["broker"], x["action"], x["pt_new"]) for x in g] == [("Goldman Sachs", "유지", 1250), ("JP Morgan", "유지", 1540)]
+    # 새 줄이 상향·하향이면 앞선 목표가는 바뀌기 전 값이라 적지 않는다
+    g = targets.latest_per_broker(targets.group([_row("Baird", "상향", None, 0), _row("Baird", "유지", 1280, 24 * 3)]))
+    assert [(x["action"], x["pt_new"]) for x in g] == [("상향", None)]
     assert targets.broker_key("Goldman") == targets.broker_key("Goldman Sachs")
     assert targets.broker_key("Melius Research") == targets.broker_key("Melius")
 
