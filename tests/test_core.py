@@ -182,3 +182,54 @@ def test_shared_db_roundtrip(tmp_path, monkeypatch):
         ("stocknews", "Baird", "MU", 1), ("stocknews", "UBS", "MU", 1)]
     assert targets_db.read("2026-10-01") == []
     targets_db.con().close()
+
+
+# ── 수집 실패 (10-04: 정각마다 구글이 거절했는데 번호가 없어 까닭을 몰랐다) ──────
+def test_collect_logs_http_status(monkeypatch):
+    import urllib.error
+
+    def refuse(stock, days, when=None):
+        raise urllib.error.HTTPError("https://example.invalid/rss", 429, "Too Many Requests", None, None)
+
+    def offline(stock, days, when=None):
+        raise urllib.error.URLError("no network")
+    said = []
+    monkeypatch.setattr(stocknews, "google_news", refuse)
+    stocknews.collect([{"name": "Micron"}], 1, ["google"], on_error=said.append)
+    monkeypatch.setattr(stocknews, "google_news", offline)
+    stocknews.collect([{"name": "Micron"}], 1, ["google"], on_error=said.append)
+    assert said == ["[Micron] google failed: HTTPError 429", "[Micron] google failed: URLError"]
+
+
+def _fetch_with(monkeypatch, errors):
+    """collect 가 errors 를 알리고 빈손으로 돌아올 때 fetch_news 를 한 번 돌린 뒤, 다음 차례가 넓게 묻는지."""
+    asked = []
+
+    def collect(stocks, days, sources, on_error=None, google_when=None):
+        asked.append(google_when)
+        for m in errors:
+            on_error(m)
+        return []
+    monkeypatch.setattr(stocknews, "load_watchlist", lambda: [{"name": "Micron"}])
+    monkeypatch.setattr(stocknews, "collect", collect)
+    monkeypatch.setattr(a.store, "known_ids", lambda: set())
+    monkeypatch.setattr(a.store, "recent_titles", lambda: [])
+    monkeypatch.setattr(a, "log", lambda *x: None)
+    monkeypatch.setattr(a, "_last_wide", 0.0)
+    cfg = {"wide_every_min": 30, "lookback_days": 1, "fresh_hours": 1}
+    a.fetch_news(cfg)
+    a.fetch_news(cfg)
+    return asked
+
+
+def test_wide_fetch_is_retried_when_the_network_was_down(monkeypatch):
+    # 잠에서 깬 직후 하루치 수집이 통째로 실패하고도 "했다"로 쳐서 30분 뒤에야 다시 물었다 (10-04)
+    assert _fetch_with(monkeypatch, ["[Micron] google failed: URLError"]) == [None, None]
+    assert _fetch_with(monkeypatch, ["[Micron] google failed: TimeoutError"]) == [None, None]
+
+
+def test_wide_fetch_is_not_retried_when_google_refused_or_all_went_well(monkeypatch):
+    # 거절당한 직후 또 넓게 물으면 더 막힌다. 야후만 실패한 것도 넓은 수집과 상관없다
+    assert _fetch_with(monkeypatch, ["[Micron] google failed: HTTPError 429"]) == [None, "1h"]
+    assert _fetch_with(monkeypatch, ["[Micron] yahoo failed: URLError"]) == [None, "1h"]
+    assert _fetch_with(monkeypatch, []) == [None, "1h"]

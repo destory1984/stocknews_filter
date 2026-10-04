@@ -347,7 +347,8 @@ def collect(stocks, days, sources, on_error=None, google_when=None):
                     items = list(SOURCES[name](stock, days))
             except (urllib.error.URLError, ET.ParseError, TimeoutError) as e:
                 # Print only the error type/reason, never the full request.
-                on_error(f"[{stock['name']}] {name} failed: {type(e).__name__}")
+                code = f" {e.code}" if isinstance(e, urllib.error.HTTPError) else ""
+                on_error(f"[{stock['name']}] {name} failed: {type(e).__name__}{code}")
                 continue
             for it in items:
                 key = norm_title(it["title"])

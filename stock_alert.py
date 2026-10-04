@@ -226,11 +226,14 @@ def fetch_news(cfg: dict) -> int:
         log(str(e))
         return 0
     wide = time.time() - _last_wide >= cfg["wide_every_min"] * 60
-    if wide:
-        _last_wide = time.time()
+    failed = []
     rows = stocknews.collect(stocks, cfg["lookback_days"], ["google", "yahoo"],
-                             on_error=lambda m: log(f"수집 실패 {m}"),
+                             on_error=lambda m: (failed.append(m), log(f"수집 실패 {m}")),
                              google_when=None if wide else f"{cfg['fresh_hours']}h")
+    # 잠에서 깬 직후처럼 네트워크가 끊겨 구글을 못 물은 때는 넓은 수집을 한 것으로 치지 않고 다음 차례에 다시 묻는다.
+    # 구글이 거절한(HTTPError) 때는 곧바로 또 넓게 물으면 더 막히니 그대로 넘어간다
+    if wide and not any("google failed" in m and "HTTPError" not in m for m in failed):
+        _last_wide = time.time()
     known = store.known_ids()
     titles = {stocknews.norm_title(t) for t in store.recent_titles()}
     now = datetime.now(timezone.utc)
