@@ -159,6 +159,16 @@ def test_group_only_unknown_direction_stays_unknown():
     assert targets.group([_row("유진증권", "제시", 560000, 0, "삼성전자")])[0]["action"] == "제시"
 
 
+def test_latest_per_broker_keeps_only_the_newest_line():
+    # 10-04: 종목별 표의 Micron 에 Goldman Sachs 가 둘 ($1,250 과 하루 앞선 $1,100), JPMorgan 은 이름 갈래까지 달랐다
+    rows = [_row("Goldman Sachs", "유지", 1250, 0), _row("JP Morgan", "유지", None, 5), _row("Goldman Sachs", "유지", 1100, 20),
+            _row("JPMorgan", "상향", 1540, 24 * 3)]
+    g = targets.latest_per_broker(targets.group(rows))
+    assert [(x["broker"], x["pt_new"]) for x in g] == [("Goldman Sachs", 1250), ("JP Morgan", None)]
+    assert targets.broker_key("Goldman") == targets.broker_key("Goldman Sachs")
+    assert targets.broker_key("Melius Research") == targets.broker_key("Melius")
+
+
 # ── 목표가 공용 DB ─────────────────────────────────────────
 def test_ticker_key():
     assert targets_db.ticker_key("005930.KS") == "005930"

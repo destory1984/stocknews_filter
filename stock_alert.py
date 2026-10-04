@@ -2359,8 +2359,12 @@ def targets_page(watcher: Watcher, order: str = "", days: int = 30) -> str:
         cards = ([f"<div class=card><table>{''.join(target_row(g, name) for g, name in flat)}</table></div>"]
                  if flat else [])
     else:
+        # 종목별 표에는 증권사마다 가장 새 조치만 (10-04 전하 분부). 최신순 표는 모든 줄을 그대로 둔다
+        last = {name: targets.latest_per_broker(gs) for name, gs in groups.items()}
+        older = lambda name: len(groups[name]) - len(last[name])
         cards = [f"<div class=card><div><b>{html.escape(name)}</b> <span class=why>{html.escape(ticker.get(name, ''))}"
-                 f" · {len(groups[name])}건</span></div><table>{''.join(target_row(g) for g in groups[name])}</table></div>"
+                 f" · {len(last[name])}건{f' (같은 증권사의 앞선 조치 {older(name)}건 뺌)' if older(name) else ''}</span></div>"
+                 f"<table>{''.join(target_row(g) for g in last[name])}</table></div>"
                  for name in sorted(groups, key=str.lower)]
     order = "name" if order == "name" else ""
     sort = " · ".join(f"<b>{label}</b>" if order == o else f"<a class=back href='/targets{'?o=' + o if o else ''}'>{label}</a>"
@@ -2407,7 +2411,7 @@ addEventListener("DOMContentLoaded",()=>{{
 <p class=sort>정렬: {sort} <a id=tgw></a> <a id=cpy>그림으로 복사</a> <select id=cpyn><option value=20>위 20줄<option value=40>위 40줄<option value=0>전체</select> <span id=cpymsg class=why></span></p>
 <p class=sort>보기: <select id=tgd><option value=0>30일 전체<option value=1>오늘<option value=3>3일<option value=7>7일</select> <label><input type=checkbox id=tgk> 유지·제시 빼기</label> <span id=tgc class=why></span></p>
 <p class=why>최근 {days}일 · {summary} · 판별 모델(Ollama, 꺼져 있으면 Claude)이 뉴스 제목에서 증권사·목표가를 뽑았다. 틀릴 수 있으니 기사로 확인할 것.
-같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
+같은 종목·증권사의 조치를 이틀 안에 여러 곳이 쓰면 한 줄로 합쳤다 (목표가가 다르면 따로, 구분은 가장 많이 나온 것). "제시" 는 목표가만 적혀 있고 올렸는지·내렸는지 제목으로 알 수 없는 것.{" 종목 이름 순 표에는 증권사마다 가장 새 조치만 보인다 (앞선 조치는 최신순 표에)." if order == "name" else ""}{f" 아직 뽑지 않은 후보 {todo}건." if todo > 0 else ""}</p>
 {''.join(cards) or "<p>아직 뽑은 목표가가 없다.</p>"}
 <p class=why>목표가 소식 없음: {html.escape(", ".join(empty)) or "없음"}</p>"""
 
